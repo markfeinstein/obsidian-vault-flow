@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags: ["*.*.*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22.13.0"
+          cache: npm
+
+      - name: Use the repository npm version
+        run: npm install --global npm@11.19.0
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Audit locked dependencies
+        run: npm audit --audit-level=high
+
+      - name: Verify tag, tests, and release assets
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: npm run check
+
+      - name: Verify the committed bundle is current
+        run: git diff --exit-code -- main.js
+
+      - name: Publish immutable GitHub release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists; refusing to overwrite published assets." >&2
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" main.js manifest.json styles.css \
+            --verify-tag \
+            --title "Vault Flow $RELEASE_TAG" \
+            --generate-notes

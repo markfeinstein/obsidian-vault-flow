@@ -1,0 +1,23 @@
+export { reconcileFileState, predicateNeedsBodyContent } from "./reconcile";
+export type {
+  DryRunRuleMatch,
+  Frontmatter,
+  FrontmatterValue,
+  JsonScalar,
+  NoteState,
+  PlannedMutation,
+  ReconciliationConverged,
+  ReconciliationCycleDetected,
+  ReconciliationInput,
+  ReconciliationMaxIterationsExceeded,
+  ReconciliationOptions,
+  ReconciliationResult,
+  NoteStat,
+  Rule,
+  RuleActionSet,
+  RuleId,
+  RulePredicate,
+  RuleRunOn,
+  PredicateTrace,
+  RuleEvaluationTrace,
+} from "./types";

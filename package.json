@@ -1,0 +1,69 @@
+{
+  "name": "vault-flow",
+  "version": "0.1.0",
+  "description": "Automate note organization with rule-based moves, renames, and property changes.",
+  "type": "module",
+  "private": true,
+  "packageManager": "npm@11.19.0",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "bundle": "node esbuild.config.mjs production",
+    "build": "npm run typecheck && npm run bundle",
+    "typecheck": "tsc --noEmit --skipLibCheck",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:obsidian:prepare": "node scripts/obsidian-smoke.mjs --prepare",
+    "test:obsidian": "node scripts/obsidian-smoke.mjs --run",
+    "verify:versions": "node scripts/verify-versions.mjs",
+    "verify:mobile-bundle": "node scripts/verify-mobile-bundle.mjs",
+    "sync:version": "node scripts/sync-version.mjs",
+    "check": "npm run lint && npm run typecheck && npm run test && npm run verify:versions && npm run verify:mobile-bundle && npm run bundle",
+    "preversion": "npm run check",
+    "version": "npm run sync:version"
+  },
+  "keywords": [
+    "obsidian",
+    "obsidian-plugin",
+    "organization",
+    "tags",
+    "frontmatter",
+    "rename"
+  ],
+  "author": "Mark Feinstein",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/markfeinstein/obsidian-vault-flow.git"
+  },
+  "homepage": "https://github.com/markfeinstein/obsidian-vault-flow#readme",
+  "bugs": {
+    "url": "https://github.com/markfeinstein/obsidian-vault-flow/issues"
+  },
+  "overrides": {
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "^11.0.1"
+    },
+    "eslint-plugin-n": {
+      "minimatch": "^11.0.1"
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "@typescript-eslint/eslint-plugin": "^8.72.1",
+    "@typescript-eslint/parser": "^8.72.1",
+    "esbuild": "^0.28.2",
+    "eslint": "^9.39.5",
+    "eslint-plugin-obsidianmd": "^0.5.1",
+    "obsidian": "^1.14.4",
+    "tslib": "^2.9.1",
+    "typescript": "^5.9.3",
+    "vitest": "^5.1.0"
+  },
+  "dependencies": {
+    "re2js": "2.9.1"
+  }
+}

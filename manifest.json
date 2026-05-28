@@ -1,0 +1,10 @@
+{
+  "id": "vault-flow",
+  "name": "Vault Flow",
+  "version": "0.1.0",
+  "minAppVersion": "1.14.4",
+  "description": "Automate note organization with rule-based moves, renames, and property changes.",
+  "author": "Mark Feinstein",
+  "authorUrl": "https://github.com/markfeinstein",
+  "isDesktopOnly": false
+}

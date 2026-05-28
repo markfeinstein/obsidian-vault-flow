@@ -1,0 +1,4 @@
+* text=auto eol=lf
+
+# Release bundle generated from the TypeScript source.
+main.js linguist-generated=true
