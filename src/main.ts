@@ -6,7 +6,9 @@ import { RecoveryModal } from "./obsidian/recovery-modal";
 import { mapWithConcurrency } from "./obsidian/concurrency";
 import { compactPreviewPlan } from "./obsidian/preview-snapshot";
 import { unknownValuesEqual } from "./engine/value-utils";
-import { cliError, formatCliDiagnostics, formatCliPlan, formatCliStatus, parseCliTrigger } from "./obsidian/cli";
+import { cliError, cliPlanSummary, formatCliDiagnostics, formatCliPlan, formatCliStatus, parseCliTrigger } from "./obsidian/cli";
+import { planCliPaths } from "./obsidian/cli-many";
+import { runRuleFixtures } from "./engine/rule-fixtures";
 import { VAULT_FLOW_BASES_VIEW_TYPE, VaultFlowBasesView } from "./obsidian/bases-view";
 import { DiagnosticLogModal } from "./obsidian/diagnostic-log-modal";
 import { createTransactionId, type ReconciliationDecision } from "./obsidian/diagnostics";
@@ -510,6 +512,28 @@ export default class VaultFlowPlugin extends Plugin {
   }
 
   private registerCliHandlers(): void {
+    this.registerCliHandler("vault-flow:plan-many", "Plan bounded exact paths without writes; return JSON summaries", {
+      paths: { value: "<json-array|newline-list>", description: "Exact relative vault paths; JSON preserves spaces", required: true },
+      limit: { value: "<1-200>", description: "Maximum distinct paths (default 100)" },
+      trigger: { value: "<manual|live|sweep>", description: "Rule trigger context (default manual)" },
+    }, async (params) => {
+      if (this.settingsReadOnly) return cliError("Vault Flow cannot plan while incompatible settings are loaded.");
+      const settings = this.settings, revision = this.settingsRevision, now = Date.now();
+      return planCliPaths(params, async (path, trigger) => {
+        const file = this.app.vault.getFileByPath(path);
+        if (file === null) throw new Error(`No vault file exists at ${path}.`);
+        return cliPlanSummary(await planReconciliationForFile(this.app, file, settings, { now, triggerContext: trigger }), trigger);
+      }, { settingsRevision: revision, stillValid: () => this.loaded && this.settingsRevision === revision });
+    });
+    this.registerCliHandler("vault-flow:test-rule", "Run one rule’s synthetic fixtures without reading or writing vault notes", {
+      rule: { value: "<rule-id>", description: "Exact configured rule ID", required: true },
+    }, (params) => {
+      if (this.settingsReadOnly) return cliError("Fixture checks require compatible settings.");
+      const rule = this.settings.rules.find((candidate) => candidate.id === params.rule);
+      if (rule === undefined) return cliError("No configured rule has that exact ID.");
+      const results = runRuleFixtures(rule);
+      return JSON.stringify({ status: results.every((result) => result.passed) ? "ok" : "failed", ruleId: rule.id, count: results.length, results }, null, 2);
+    });
     this.registerCliHandler(
       "vault-flow:status",
       "Show Vault Flow dry-run, pause, queue, and latest-decision status as JSON",

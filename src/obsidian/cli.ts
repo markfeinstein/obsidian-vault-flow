@@ -60,8 +60,12 @@ export function parseCliTrigger(value: CliData[string] | undefined): RuleRunOn |
 }
 
 export function formatCliPlan(plan: DryRunPreviewPlan, trigger: RuleRunOn): string {
-  const result = plan.result;
-  return cliJson({
+  return cliJson(cliPlanSummary(plan, trigger));
+}
+
+export function cliPlanSummary(plan: DryRunPreviewPlan, trigger: RuleRunOn): Record<string, unknown> {
+  const changes = plan.result === null ? [] : frontmatterDiff(plan.current, plan.result.desired);
+  return {
     status: "ok",
     trigger,
     path: plan.current.path,
@@ -72,10 +76,10 @@ export function formatCliPlan(plan: DryRunPreviewPlan, trigger: RuleRunOn): stri
     involvedRuleIds: plan.preview.involvedRuleIds,
     iterations: plan.preview.iterations,
     message: plan.preview.message,
-    propertyChanges: result === null
-      ? []
-      : frontmatterDiff(plan.current, result.desired).map((change) => change.property),
-  });
+    propertyChanges: changes.slice(0, 100).map((change) => change.property.slice(0, 1024)),
+    propertyChangeCount: changes.length,
+    propertyChangesTruncated: changes.length > 100 || changes.some((change) => change.property.length > 1024),
+  };
 }
 
 export function cliError(message: string): string {

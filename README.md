@@ -192,12 +192,14 @@ File and multi-file context menus also offer manual reconciliation for eligible 
 
 ## Obsidian CLI
 
-With the official Obsidian CLI enabled, Vault Flow provides three read-only JSON commands:
+With the official Obsidian CLI enabled, Vault Flow provides read-only JSON commands:
 
 ```sh
 obsidian vault="VAULT" vault-flow:status
 obsidian vault="VAULT" vault-flow:diagnostics limit=20 outcome=error
 obsidian vault="VAULT" vault-flow:plan path="Inbox/Example.md" trigger=manual
+obsidian vault="VAULT" vault-flow:plan-many paths='["Inbox/Example.md","Projects/Some note.md"]' limit=100 trigger=manual
+obsidian vault="VAULT" vault-flow:test-rule rule="archive-reviewed"
 ```
 
 The plan output contains paths, rule IDs, mutation kinds, and changed property names. It omits note bodies and property values. Diagnostics can still contain private paths and rule identifiers.
@@ -227,6 +229,10 @@ Useful commands:
 ## Releases
 
 `package.json` is the version source of truth. Release tags are numeric versions such as `0.1.0` and must match `manifest.json`. The release workflow checks the build and publishes `main.js`, `manifest.json`, and `styles.css`.
+
+`plan-many` accepts a JSON path array or a newline-separated exact path list (for example, the output of the official `base:query path=… view=… format=paths` command). It deduplicates paths, defaults to 100 notes, caps requests at 200 notes / 64 KiB, runs at concurrency 4, and limits output to 1 MiB. Planning stops launching notes after 10 seconds or a settings change. An in-flight Obsidian read or synchronous engine evaluation cannot be forcibly aborted. Results never include body text or property values; property-name lists are bounded and mark truncation. There is deliberately no CLI apply command. The official CLI connects to a running Obsidian instance; it is not a headless, in-process Bases query API.
+
+`test-rule` runs one configured rule’s synthetic fixtures with the same fixed defaults as the editor and does not read vault notes.
 
 ## Interrupted-write recovery
 

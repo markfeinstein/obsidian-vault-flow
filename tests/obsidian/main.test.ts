@@ -96,6 +96,8 @@ describe("VaultFlowPlugin regex compatibility", () => {
     await plugin.onload();
     expect(hoverSource).toHaveBeenCalledWith("vault-flow-plan", { display: "Vault Flow", defaultMod: true });
     expect((plugin as unknown as { cliHandlers: Array<{ command: string }> }).cliHandlers.map(({ command }) => command)).toEqual([
+      "vault-flow:plan-many",
+      "vault-flow:test-rule",
       "vault-flow:status",
       "vault-flow:diagnostics",
       "vault-flow:plan",
