@@ -153,7 +153,7 @@ Strict RE2 syntax remains the default: lookarounds and backreferences are reject
 - Planning and writing recheck the file path, metadata, body content when needed, settings revision, and destination collision state.
 - Mutations are serialized. If a property write fails after a rename, Vault Flow attempts to move the note back.
 - A device-local pause stops new writes. The default circuit breaker allows 100 transaction starts per rolling minute and 100 selected rows per reviewed batch.
-- Collision handling can skip the note or choose an available numeric suffix.
+- Collision handling can skip the note or choose an available numeric suffix. Apply previews reserve exact destinations and planned parent folders across the selected batch before confirmation and show the reserved names. A row beneath a file or an earlier reserved file is blocked. If a reviewed destination becomes occupied, that row is skipped instead of silently choosing a different suffix.
 - Closing an apply preview cancels rows that have not started. A transaction already writing is allowed to finish or roll back.
 
 Undo records are kept separately from diagnostics. Vault Flow retains up to 100 transactions for seven days, capped at 1 MiB. Before undoing, it checks the current path, file statistics, SHA-256 content fingerprint, and complete frontmatter after-state. If the note was edited, replaced, moved elsewhere, or deleted, undo is refused.
