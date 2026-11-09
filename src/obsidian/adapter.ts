@@ -4,6 +4,8 @@ import type { CollisionPolicy } from "./settings";
 import { captureNoteIdentity, type NoteIdentity } from "./note-identity";
 import { canonicalValue as stableStringifyUnknown, rawFrontmatterEqual } from "../engine/value-utils";
 export { rawFrontmatterEqual } from "../engine/value-utils";
+import { createTransactionId } from "./diagnostics";
+import type { PendingNoteMutation } from "./transaction-journal";
 
 const MAX_COLLISION_SUFFIX_ATTEMPTS = 10_000;
 const PROTECTED_VAULT_PATHS = [".trash"];
@@ -22,6 +24,7 @@ export class TransactionInterruptedError extends Error {
 }
 
 export interface AppliedReconciliationTransaction {
+  readonly transactionId?: string;
   readonly beforePath: string;
   readonly afterPath: string;
   readonly beforeFrontmatter?: Record<string, unknown>;
@@ -110,7 +113,8 @@ export async function applyReconciliationResult(
   current: NoteState,
   result: ReconciliationConverged,
   assertCanStart: () => void = () => {},
-  onMutationStarted: () => void = () => {},
+  onMutationStarted: (pending: PendingNoteMutation) => void = () => {},
+  onMutationFinished: (transaction: AppliedReconciliationTransaction) => void = () => {},
 ): Promise<AppliedReconciliationTransaction> {
   const desiredPath = normalizePath(result.desired.path);
 
@@ -118,6 +122,18 @@ export async function applyReconciliationResult(
   const pathChanged = (hasMutation(activeMutations, "move") || hasMutation(activeMutations, "rename"))
     && normalizePath(file.path) !== desiredPath;
 
+  const shouldUpdateFrontmatter = hasMutation(activeMutations, "frontmatter") && frontmatterChanged(current, result.desired);
+  let transactionId: string | undefined;
+  const start = (): void => {
+    if (transactionId !== undefined) return;
+    const timestamp = Date.now();
+    transactionId = createTransactionId(timestamp, current.path);
+    const before = cloneUnknownRecord(current.rawFrontmatter ?? { ...current.frontmatter });
+    const after = cloneUnknownRecord(before);
+    if (shouldUpdateFrontmatter) applyDesiredFrontmatter(after, result.desired, current);
+    onMutationStarted({ transactionId, timestamp, beforePath: current.path, afterPath: desiredPath,
+      beforeFrontmatter: before, afterFrontmatter: after, mutationKinds: activeMutations.map((mutation) => mutation.kind), ruleIds: result.appliedRuleIds, iterations: result.iterations });
+  };
   assertCanStart();
   if (pathChanged) {
     validateReconciliationResult(app, file, result);
@@ -130,14 +146,13 @@ export async function applyReconciliationResult(
   assertCanStart();
   let renamed = false;
   if (pathChanged) {
-    onMutationStarted();
+    start();
     await app.fileManager.renameFile(file, desiredPath);
     renamed = true;
   }
 
   let beforeFrontmatter: Record<string, unknown> | undefined;
   let afterFrontmatter: Record<string, unknown> | undefined;
-  const shouldUpdateFrontmatter = hasMutation(activeMutations, "frontmatter") && frontmatterChanged(current, result.desired);
   if (shouldUpdateFrontmatter) {
     try {
       await app.fileManager.processFrontMatter(file, (value: unknown) => {
@@ -148,7 +163,7 @@ export async function applyReconciliationResult(
         if (current.rawFrontmatter !== undefined && !rawFrontmatterEqual(current.rawFrontmatter, value)) {
           throw new Error("The note frontmatter changed after reconciliation was planned.");
         }
-        if (!renamed) onMutationStarted();
+        if (!renamed) start();
         beforeFrontmatter = cloneUnknownRecord(value);
         applyDesiredFrontmatter(value, result.desired, current);
         afterFrontmatter = cloneUnknownRecord(value);
@@ -173,13 +188,16 @@ export async function applyReconciliationResult(
   } catch {
     afterIdentity = undefined;
   }
-  return {
+  const transaction: AppliedReconciliationTransaction = {
+    ...(transactionId === undefined ? {} : { transactionId }),
     ...(afterIdentity === undefined ? {} : { afterIdentity }),
     beforePath: current.path,
     afterPath: desiredPath,
     ...(beforeFrontmatter === undefined ? {} : { beforeFrontmatter }),
     ...(afterFrontmatter === undefined ? {} : { afterFrontmatter }),
   };
+  if (transactionId !== undefined) onMutationFinished(transaction);
+  return transaction;
 }
 
 function formatError(error: unknown): string {
@@ -411,7 +429,7 @@ function stripHashPrefix(tag: string): string {
   return tag.startsWith("#") ? tag.slice(1) : tag;
 }
 
-function validateVaultPath(app: App, path: string): void {
+export function validateVaultPath(app: App, path: string): void {
   const normalized = normalizePath(path);
   const unsafeSegment = normalized.split("/").some((segment) => segment === "..");
   if (unsafeSegment) {

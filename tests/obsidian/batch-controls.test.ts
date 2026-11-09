@@ -124,7 +124,7 @@ describe("batch receipt retention and grouped undo", () => {
 
   it("undoes retained members in reverse order while preserving a replaced member", async () => {
     const files = Array.from({ length: 3 }, (_, index) => Object.assign(new TFile(), {
-      path: `Done/${index}.md`, stat: { ctime: index === 2 ? 999 : 1, mtime: 1, size: 0 },
+      path: `Done/${index}.md`, basename: String(index), extension: "md", stat: { ctime: index === 2 ? 999 : 1, mtime: 1, size: 0 },
     }));
     const paths: string[] = [];
     const app = { vault: { getFileByPath: (path: string) => files.find((file) => file.path === path) ?? null,

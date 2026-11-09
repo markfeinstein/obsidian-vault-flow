@@ -28,7 +28,7 @@ describe("independent transaction retention", () => {
   it("loads the journal without exposing snapshots through plugin settings", async () => {
     const original = transaction();
     const p = plugin({
-      loadLocalStorage: () => ({ trackedMtimes: {}, ruleStats: {}, recentDecisions: [original], transactions: [original] }),
+      loadLocalStorage: (key) => key === "vault-flow:runtime-state:v1" ? { trackedMtimes: {}, ruleStats: {}, recentDecisions: [original], transactions: [original] } : null,
       metadataCache: { on: vi.fn() } as unknown as App["metadataCache"],
       vault: { on: vi.fn() } as unknown as App["vault"],
       workspace: { on: vi.fn(), onLayoutReady: vi.fn() } as unknown as App["workspace"],

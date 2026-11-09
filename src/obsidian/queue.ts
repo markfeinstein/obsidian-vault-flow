@@ -33,7 +33,8 @@ export interface ReconciliationQueueCallbacks {
   readonly onReconciled?: (file: TFile, context: { readonly triggerContexts: readonly RuleRunOn[]; readonly revision: number }) => void | Promise<void>;
   readonly runExclusive?: <T>(operation: () => Promise<T>) => Promise<T>;
   readonly now?: () => number;
-  readonly onMutationStarted?: () => void;
+  readonly onMutationStarted?: Parameters<typeof applyReconciliationResult>[5];
+  readonly onMutationFinished?: Parameters<typeof applyReconciliationResult>[6];
 }
 
 type ReconciliationCompletion = "reconciled" | "deferred" | "failed";
@@ -522,7 +523,7 @@ export class ReconciliationQueue {
           if (!sameNoteStateBaseline(latestCurrent.current, baseline)) {
             throw new TransactionInterruptedError("changed");
           }
-        }, () => this.callbacks.onMutationStarted?.());
+        }, (pending) => this.callbacks.onMutationStarted?.(pending), (transaction) => this.callbacks.onMutationFinished?.(transaction));
         return {
           status: "applied",
           current: latestCurrent.current,
@@ -619,7 +620,7 @@ export class ReconciliationQueue {
       mutationKinds,
       iterations: result.iterations,
       desiredPath: execution.transaction.afterPath,
-      transactionId: createTransactionId(timestamp, execution.transaction.beforePath),
+      transactionId: execution.transaction.transactionId ?? createTransactionId(timestamp, execution.transaction.beforePath),
       ...(execution.transaction.afterIdentity === undefined ? {} : { afterIdentity: execution.transaction.afterIdentity }),
       ...(execution.transaction.beforeFrontmatter === undefined ? {} : { beforeFrontmatter: execution.transaction.beforeFrontmatter }),
       ...(execution.transaction.afterFrontmatter === undefined ? {} : { afterFrontmatter: execution.transaction.afterFrontmatter }),
