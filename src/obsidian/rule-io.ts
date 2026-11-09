@@ -2,7 +2,7 @@ import type { Rule } from "../engine";
 import { sanitizeRules } from "./settings";
 import { ruleConvergenceWarnings } from "./rule-warnings";
 
-export const RULE_IMPORT_SCHEMA_VERSION = 2;
+export const RULE_IMPORT_SCHEMA_VERSION = 3;
 export const MAX_RULE_IMPORT_TEXT_LENGTH = 1_000_000;
 
 export interface RuleExportEnvelope {

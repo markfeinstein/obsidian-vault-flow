@@ -228,6 +228,20 @@ Useful commands:
 
 `package.json` is the version source of truth. Release tags are numeric versions such as `0.1.0` and must match `manifest.json`. The release workflow checks the build and publishes `main.js`, `manifest.json`, and `styles.css`.
 
+## Rule fixtures and semantic save review
+
+The editor shows condition, action, execution-order, and fixture changes before saving. Repetition warnings and failed fixtures require explicit acknowledgment. Add up to 20 synthetic fixtures (200 KB total per rule) in the editor and run them without reading or writing vault notes. A disabled rule is enabled only for its fixture run; `runOn` is still honored. Fixtures default to a fixed clock (`now: 0`), the manual trigger, and 10 iterations. Use explicit `now`/timestamps for age tests. Expected frontmatter is a subset; `absentProperties` asserts deletion.
+
+```json
+[{
+  "name": "Archive reviewed note",
+  "note": { "path": "Inbox/example.md", "frontmatter": { "status": "reviewed" }, "body": "Synthetic example" },
+  "expected": { "path": "Archive/example.md", "changed": true, "status": "converged" }
+}]
+```
+
+Fixtures are saved and exported with rules: do not copy private note content into them. Settings schema 4 and rule-export schema 3 preserve the new data and make older plugin versions fail closed. Existing settings and rule exports migrate without changing their rule semantics.
+
 ## Planning performance
 
 Planning first evaluates metadata and earlier rule actions in memory, loading a note body only if evaluation reaches a body-dependent condition. Compiled regexes are retained for the active immutable rule set. Vault and Bases previews release retained note text in favor of SHA-256 body baselines, and vault previews discard unchanged rows as planning completes. These optimizations preserve stale-plan checks and sequential rule semantics.

@@ -26,12 +26,12 @@ describe("explicit destination intent", () => {
     expect(sanitizeRules([{ ...rule, then: { ...rule.then, moveToKind: ["folder"] } }]).rules).toEqual([]);
   });
 
-  it("migrates older settings with schema three safety limits while retaining schema two rule exports", () => {
-    expect(SETTINGS_SCHEMA_VERSION).toBe(3);
+  it("migrates older settings and retains explicit destinations in versioned exports", () => {
+    expect(SETTINGS_SCHEMA_VERSION).toBe(4);
     const migrated = sanitizeVaultFlowSettings({ settingsVersion: 1, rules: [{ ...rule, then: { moveTo: "Archive" } }] });
     expect(migrated.incompatibleVersion).toBeUndefined();
     expect(migrated.sanitized).toBe(true);
     expect(migrated.settings.rules).toHaveLength(1);
-    expect(JSON.parse(formatRuleExport([rule], "0.1.0"))).toMatchObject({ schemaVersion: 2 });
+    expect(JSON.parse(formatRuleExport([rule], "0.1.0"))).toMatchObject({ schemaVersion: 3 });
   });
 });

@@ -94,7 +94,7 @@ describe("sanitizeVaultFlowSettings — top-level", () => {
 
   it("accepts versioned settings envelopes", () => {
     const result = sanitizeVaultFlowSettings({
-      settingsVersion: 3,
+      settingsVersion: 4,
       settings: { debounceMs: 250 },
     });
     expect(result.sanitized).toBe(false);
@@ -103,17 +103,17 @@ describe("sanitizeVaultFlowSettings — top-level", () => {
 
   it("fails closed for unsupported future settings versions", () => {
     const result = sanitizeVaultFlowSettings({
-      settingsVersion: 4,
+      settingsVersion: 5,
       settings: { debounceMs: 250, dryRun: false },
     });
     expect(result.sanitized).toBe(false);
-    expect(result.incompatibleVersion).toBe(4);
+    expect(result.incompatibleVersion).toBe(5);
     expect(result.settings).toEqual(DEFAULT_SETTINGS);
   });
 
   it("preserves settings when wrapped in a matching version envelope", () => {
     const result = sanitizeVaultFlowSettings({
-      settingsVersion: 3,
+      settingsVersion: 4,
       settings: {
         dryRun: false,
         collisionPolicy: "skip",

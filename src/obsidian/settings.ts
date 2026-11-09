@@ -1,5 +1,6 @@
 import { compileRuleRegex } from "../engine/rule-regex";
 import { compilePathGlob } from "../engine/path-glob";
+import { readRuleFixtures } from "../engine/rule-fixtures";
 import { normalizePath } from "obsidian";
 import type { FrontmatterValue, PlannedMutation, Rule, RuleActionSet, RulePredicate, RuleId, RuleRunOn } from "../engine";
 import { cloneDecision, type ReconciliationDecision, type ReconciliationDecisionOutcome } from "./diagnostics";
@@ -11,7 +12,7 @@ import { sanitizeBatchHistory, type BatchReceipt } from "./batch-history";
 
 export type CollisionPolicy = "skip" | "rename-with-suffix";
 
-export const SETTINGS_SCHEMA_VERSION = 3;
+export const SETTINGS_SCHEMA_VERSION = 4;
 
 export type RuleStatsMap = Record<string, { matchCount: number; lastMatchAt: number }>;
 
@@ -704,6 +705,8 @@ function readRule(value: unknown): RuleReadResult | null {
     return null;
   }
   const dryRun = value.dryRun;
+  const fixtures = value.fixtures === undefined ? undefined : readRuleFixtures(value.fixtures);
+  if (fixtures === null) return null;
 
   return {
     rule: {
@@ -714,6 +717,7 @@ function readRule(value: unknown): RuleReadResult | null {
       order: value.order,
       when: when.predicate,
       then: then.actionSet,
+      ...(fixtures === undefined ? {} : { fixtures }),
       ...(stopOnMatch === undefined || stopOnMatch === false ? {} : { stopOnMatch }),
       ...(runOn === undefined ? {} : { runOn }),
       ...(dryRun === undefined || dryRun === false ? {} : { dryRun }),
@@ -722,7 +726,7 @@ function readRule(value: unknown): RuleReadResult | null {
       || then.sanitized
       || id !== value.id
       || name !== value.name
-      || hasUnknownKeys(value, ["id", "name", "enabled", "priority", "order", "when", "then", "stopOnMatch", "runOn", "dryRun"]),
+      || hasUnknownKeys(value, ["id", "name", "enabled", "priority", "order", "when", "then", "stopOnMatch", "runOn", "dryRun", "fixtures"]),
   };
 }
 
@@ -1115,6 +1119,7 @@ function cloneRule(rule: Rule): Rule {
     order: rule.order,
     when: clonePredicate(rule.when),
     then: cloneActionSet(rule.then),
+    ...(rule.fixtures === undefined ? {} : { fixtures: readRuleFixtures(rule.fixtures) ?? [] }),
     ...(rule.stopOnMatch === undefined || rule.stopOnMatch === false ? {} : { stopOnMatch: rule.stopOnMatch }),
     ...(rule.runOn === undefined ? {} : { runOn: rule.runOn }),
     ...(rule.dryRun === undefined || rule.dryRun === false ? {} : { dryRun: rule.dryRun }),
