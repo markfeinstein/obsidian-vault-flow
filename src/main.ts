@@ -63,6 +63,7 @@ export default class VaultFlowPlugin extends Plugin {
   });
   private lastSweepRevision = -1;
   private lastSweepAt: number | null = null;
+  private pendingSweepPaths = new Set<string>();
   private transactions: readonly ReconciliationDecision[] = [];
   private batches: readonly BatchReceipt[] = [];
   private trackedMtimeCache: Map<string, number> | null = null;
@@ -231,7 +232,11 @@ export default class VaultFlowPlugin extends Plugin {
     this.registerEvent(this.app.metadataCache.on("changed", (file) => {
       if (!this.settingsReadOnly && this.app.workspace.layoutReady && this.isProcessableFile(file)) {
         this.queue?.enqueue(file, "live");
+        if (this.pendingSweepPaths.delete(normalizePath(file.path))) this.queue?.enqueue(file, "sweep");
       }
+    }));
+    this.registerEvent(this.app.metadataCache.on("resolved", () => {
+      if (this.loaded && !this.settingsReadOnly && this.app.workspace.layoutReady && this.pendingSweepPaths.size > 0) void this.runMtimeSweep();
     }));
 
     this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
@@ -562,6 +567,7 @@ export default class VaultFlowPlugin extends Plugin {
     this.diagnosticsRefreshTimer = null;
     this.flushRuntimeStateSave();
     this.queue?.clear();
+    this.pendingSweepPaths.clear();
     this.queue = null;
     this.statusBarItemEl = null;
   }
@@ -876,7 +882,13 @@ export default class VaultFlowPlugin extends Plugin {
     const force = this.lastSweepRevision !== this.settingsRevision
       || previousSweepAt === null
       || now < previousSweepAt;
-    const markdownFiles = this.includedMarkdownFiles();
+    // Layout readiness does not imply metadata readiness. Retain the sweep
+    // trigger until each statically in-scope note has actually been indexed.
+    const allFiles = this.app.vault.getMarkdownFiles();
+    this.pendingSweepPaths = new Set(allFiles.filter((file) =>
+      this.app.metadataCache.getFileCache(file) === null
+      && evaluateFileEligibility(file, {}, this.settings).eligible).map((file) => normalizePath(file.path)));
+    const markdownFiles = allFiles.filter((file) => this.isProcessableFile(file));
     const plan = planMtimeSweep(markdownFiles, this.settings.trackedMtimes, {
       force,
       ...(force ? {} : {
