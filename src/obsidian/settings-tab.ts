@@ -88,6 +88,7 @@ type MutableRuleDraft = {
   conditionNodes: MutableConditionNode[];
   stopOnMatch: boolean;
   dryRun: boolean;
+  regexLookbehind: boolean;
   runOn: "always" | "live" | "sweep" | "manual";
   moveTo: string;
   moveToKind: "auto" | "folder" | "file";
@@ -324,6 +325,11 @@ export class VaultFlowSettingTab extends PluginSettingTab {
             },
           },
           {
+            name: "Batch body regex matching (experimental)",
+            desc: "Opt in to RE2Set for immutable body predicates. Bounded to 128 patterns / 20,000 combined instructions; failures fall back to individual matching. Benchmark representative rules before enabling.",
+            control: { type: "toggle", key: "useRegexSet" },
+          },
+          {
             name: "Maximum iterations",
             desc: "Maximum reconciliation passes before reporting non-convergence.",
             control: {
@@ -387,6 +393,7 @@ export class VaultFlowSettingTab extends PluginSettingTab {
         break;
       case "sweepOnStartup":
       case "periodicSweepEnabled":
+      case "useRegexSet":
         if (typeof value === "boolean") {
           await this.host.updateSettings({ [key]: value });
         }
@@ -619,6 +626,7 @@ class RuleEditorModal extends Modal {
       conditionNodes,
       stopOnMatch: base.stopOnMatch,
       dryRun: base.dryRun,
+      regexLookbehind: base.regexLookbehind ?? false,
       runOn: base.runOn,
       moveTo: base.moveTo,
       moveToKind: base.moveToKind ?? "auto",
@@ -849,6 +857,10 @@ class RuleEditorModal extends Modal {
         const results = candidate === undefined ? [] : runRuleFixtures(candidate);
         new Notice(results.length === 0 ? "No fixtures configured." : results.map((test) => `${test.passed ? "PASS" : "FAIL"} ${test.name}${test.failures.length === 0 ? "" : ": " + test.failures.join("; ")}`).join("\n"), 15_000);
       }));
+
+    new Setting(this.contentEl).setName("Allow captureless regex lookbehind")
+      .setDesc("Explicit RE2JS extension for this rule only. No capturing groups inside lookbehind, lookaheads, or backreferences. Can be slower than ordinary RE2 matching.")
+      .addToggle((toggle) => toggle.setValue(d.regexLookbehind).onChange((value) => { d.regexLookbehind = value; }));
 
     // --- Save / Cancel ---
     new Setting(this.contentEl)
@@ -1710,6 +1722,7 @@ function buildVisualDraft(draft: MutableRuleDraft): VisualRuleDraft {
     conditionNodes: draft.conditionNodes,
     stopOnMatch: draft.stopOnMatch,
     dryRun: draft.dryRun,
+    regexLookbehind: draft.regexLookbehind,
     runOn: draft.runOn,
     predicateType: criterion.predicateType,
     tag: criterion.tag,

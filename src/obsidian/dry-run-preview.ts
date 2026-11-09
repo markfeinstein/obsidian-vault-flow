@@ -5,6 +5,8 @@ import { withNoteStatePath } from "./note-state";
 import { planFileReconciliation } from "./planner";
 import type { VaultFlowSettings } from "./settings";
 
+type PreviewSettings = Pick<VaultFlowSettings, "maxIterations" | "rules" | "collisionPolicy" | "exclusionPatterns" | "disableFrontmatterKey" | "monitoredFolders"> & { readonly useRegexSet?: boolean };
+
 export type DryRunPreviewOutcome = "unchanged" | "changed" | "dry-run" | "skipped" | "cycle-detected" | "max-iterations-exceeded" | "excluded" | "error";
 
 export interface DryRunPreview {
@@ -35,7 +37,7 @@ export interface DryRunPreviewPlan {
 export async function previewReconciliationForFile(
   app: App,
   file: TFile,
-  settings: Pick<VaultFlowSettings, "maxIterations" | "rules" | "collisionPolicy" | "exclusionPatterns" | "disableFrontmatterKey" | "monitoredFolders">,
+  settings: PreviewSettings,
 ): Promise<DryRunPreview> {
   return (await planReconciliationForFile(app, file, settings)).preview;
 }
@@ -43,7 +45,7 @@ export async function previewReconciliationForFile(
 export async function planReconciliationForFile(
   app: App,
   file: TFile,
-  settings: Pick<VaultFlowSettings, "maxIterations" | "rules" | "collisionPolicy" | "exclusionPatterns" | "disableFrontmatterKey" | "monitoredFolders">,
+  settings: PreviewSettings,
   options: { readonly now?: number; readonly triggerContext?: RuleRunOn | readonly RuleRunOn[] } = {},
 ): Promise<DryRunPreviewPlan> {
   const plan = await planFileReconciliation(

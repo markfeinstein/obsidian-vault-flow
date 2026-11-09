@@ -1,5 +1,6 @@
 import { compilePathGlob } from "./path-glob";
 import { canonicalValue, sortValue } from "./value-utils";
+import { lazyBodyRegexMatcher } from "./body-regex-set";
 import { compileRuleRegex, regexCompilerForRules, type RuleRegex } from "./rule-regex";
 import type {
   DryRunRuleMatch,
@@ -63,7 +64,8 @@ export function reconcileFileState(input: ReconciliationInput): ReconciliationRe
     .sort(compareRules);
   const maxIterations = Math.max(0, input.options.maxIterations);
 
-  const predicateContext: PredicateContext = { compile: regexCompilerForRules(input.rules), missingBody: input.options.onMissingBodyContent, bodyCache: new Map() };
+  const predicateContext: PredicateContext = { owner: input.rules, missingBody: input.options.onMissingBodyContent, bodyCache: new Map(),
+    bodyMatcher: input.options.useRegexSet === true && input.file.bodyContent !== undefined ? lazyBodyRegexMatcher(input.rules, input.file.bodyContent) : undefined };
   const seen = new Map<string, number>();
   const states: NoteState[] = [initial];
   const appliedRuleIds: RuleId[] = [];
@@ -175,8 +177,9 @@ function evaluateRules(
   let stoppedOnMatch = false;
 
   for (const rule of rules) {
-    const needsCaptures = onRuleEvaluated !== undefined || [rule.then.moveTo, rule.then.renameTo].some((template) => template !== undefined && /\{\d+\}/u.test(template));
-    const predicate = evaluatePredicate(rule.when, nextState, now, onRuleEvaluated !== undefined, { ...context, captures: needsCaptures });
+    const needsCaptures = onRuleEvaluated !== undefined || [rule.then.moveTo, rule.then.renameTo].some((template) => template !== undefined && /\{\s*\d+\s*\}/u.test(template));
+    const predicate = evaluatePredicate(rule.when, nextState, now, onRuleEvaluated !== undefined, { ...context, captures: needsCaptures,
+      lookbehind: rule.regexLookbehind === true, compile: regexCompilerForRules(context.owner ?? rules, rule.regexLookbehind === true) });
     if (!predicate.matched) {
       if (predicate.trace !== undefined) onRuleEvaluated?.({ iteration, ruleId: rule.id, ruleName: rule.name,
         outcome: "not-matched", predicate: predicate.trace, before: nextState, after: nextState, messages: [] });
@@ -803,17 +806,28 @@ export interface PredicateEvaluation {
  * capture set of each kind from successful children. Negation exports none. */
 interface PredicateContext {
   readonly compile?: (pattern: string) => RuleRegex;
+  readonly owner?: object;
+  readonly lookbehind?: boolean;
+  readonly bodyMatcher?: (pattern: string, lookbehind: boolean) => boolean | undefined;
   readonly missingBody?: () => never;
   readonly captures?: boolean;
-  readonly bodyCache?: Map<RulePredicate, PredicateEvaluation>;
+  readonly bodyCache?: Map<RulePredicate, Map<(pattern: string) => RuleRegex, { readonly result: PredicateEvaluation; readonly capturesComplete: boolean }>>;
 }
 
 export function evaluatePredicate(predicate: RulePredicate, state: NoteState, now: number, trace = false, context: PredicateContext = {}): PredicateEvaluation {
   const compile = context.compile ?? compileRuleRegex;
   const bodyLeaf = predicate.type === "contentContains" || predicate.type === "contentRegex" || predicate.type === "wordCount";
   if (bodyLeaf && state.bodyContent === undefined) context.missingBody?.();
-  const cached = !trace && bodyLeaf ? context.bodyCache?.get(predicate) : undefined;
-  if (cached !== undefined) return context.captures === false ? { ...cached, captures: [], contentCaptures: [] } : cached;
+  const cached = !trace && bodyLeaf ? context.bodyCache?.get(predicate)?.get(compile) : undefined;
+  if (cached !== undefined) {
+    if (context.captures === false) return { ...cached.result, captures: [], contentCaptures: [] };
+    if (cached.capturesComplete) return cached.result;
+    if (predicate.type === "contentRegex") {
+      const result = { ...cached.result, contentCaptures: compile(predicate.pattern).captures(state.bodyContent ?? "") };
+      context.bodyCache?.get(predicate)?.set(compile, { result, capturesComplete: true });
+      return result;
+    }
+  }
   const children: PredicateTrace[] | undefined = trace ? [] : undefined;
   const finish = (matched: boolean, captures: readonly string[] = [], contentCaptures: readonly string[] = []): PredicateEvaluation => ({
     matched, captures, contentCaptures,
@@ -846,13 +860,17 @@ export function evaluatePredicate(predicate: RulePredicate, state: NoteState, no
     if (context.missingBody === undefined && state.bodyContent === undefined && predicateNeedsBodyContent(predicate.predicate)) return finish(false);
     return finish(!evaluate(predicate.predicate).matched);
   }
-  const matched = predicateMatches(predicate, state, now, compile);
+  const matched = (predicate.type === "contentRegex" && state.bodyContent !== undefined ? context.bodyMatcher?.(predicate.pattern, context.lookbehind === true) : undefined)
+    ?? predicateMatches(predicate, state, now, compile);
   let result = finish(matched);
   if (matched && predicate.type === "basename" && context.captures !== false) result = finish(true, compile(predicate.pattern).captures(state.basename));
-  // Cache the full capture set only when requested. A later rule sharing this
-  // predicate may need captures even if the first matching action did not.
+  // Capture extraction stays lazy; a shared body predicate can upgrade its
+  // cached boolean result if a later rule actually needs the captures.
   if (matched && predicate.type === "contentRegex" && context.captures !== false) result = finish(true, [], compile(predicate.pattern).captures(state.bodyContent ?? ""));
-  if (!trace && bodyLeaf && (predicate.type !== "contentRegex" || !matched || context.captures !== false)) context.bodyCache?.set(predicate, result);
+  if (!trace && bodyLeaf && context.bodyCache !== undefined) {
+    const entries = context.bodyCache.get(predicate) ?? new Map<(pattern: string) => RuleRegex, { readonly result: PredicateEvaluation; readonly capturesComplete: boolean }>();
+    entries.set(compile, { result, capturesComplete: predicate.type !== "contentRegex" || !matched || context.captures !== false }); context.bodyCache.set(predicate, entries);
+  }
   return result;
 }
 

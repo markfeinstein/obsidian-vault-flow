@@ -20,6 +20,7 @@ export interface VaultFlowSettings {
   readonly rules: readonly Rule[];
   readonly debounceMs: number;
   readonly maxIterations: number;
+  readonly useRegexSet: boolean;
   readonly maxWritesPerMinute: number;
   readonly maxBatchWrites: number;
   readonly dryRun: boolean;
@@ -67,6 +68,7 @@ export const DEFAULT_SETTINGS: VaultFlowSettings = {
   rules: [],
   debounceMs: 500,
   maxIterations: 10,
+  useRegexSet: false,
   maxWritesPerMinute: 100,
   maxBatchWrites: 100,
   dryRun: true,
@@ -110,6 +112,8 @@ export function sanitizeVaultFlowSettings(data: unknown, defaults: VaultFlowSett
     sanitized = true;
   }
 
+  const useRegexSet = readBoolean(settingsSource.useRegexSet, defaults.useRegexSet);
+  if (settingsSource.useRegexSet !== undefined && useRegexSet !== settingsSource.useRegexSet) sanitized = true;
   const maxIterations = readPositiveInteger(settingsSource.maxIterations, defaults.maxIterations);
   if (settingsSource.maxIterations !== undefined && maxIterations !== settingsSource.maxIterations) {
     sanitized = true;
@@ -214,6 +218,7 @@ export function sanitizeVaultFlowSettings(data: unknown, defaults: VaultFlowSett
       rules: rulesResult.rules,
       debounceMs,
       maxIterations,
+      useRegexSet,
       maxWritesPerMinute,
       maxBatchWrites,
       dryRun,
@@ -257,7 +262,7 @@ function unsupportedRulePatterns(value: unknown): readonly string[] {
       }
       if (["basename", "bodyH1", "frontmatterRegex", "contentRegex"].includes(String(predicate.type)) && typeof predicate.pattern === "string") {
         try {
-          compileRuleRegex(predicate.pattern);
+          compileRuleRegex(predicate.pattern, rule.regexLookbehind === true);
         } catch {
           errors.push(typeof rule.id === "string" ? rule.id : "Unnamed rule");
           break;
@@ -333,6 +338,7 @@ function cloneSettings(settings: VaultFlowSettings): VaultFlowSettings {
     rules: settings.rules.map(cloneRule),
     debounceMs: settings.debounceMs,
     maxIterations: settings.maxIterations,
+    useRegexSet: settings.useRegexSet,
     maxWritesPerMinute: settings.maxWritesPerMinute,
     maxBatchWrites: settings.maxBatchWrites,
     dryRun: settings.dryRun,
@@ -683,7 +689,8 @@ function readRule(value: unknown): RuleReadResult | null {
     return null;
   }
 
-  const when = readPredicate(value.when);
+  if (value.regexLookbehind !== undefined && typeof value.regexLookbehind !== "boolean") return null;
+  const when = readPredicate(value.when, value.regexLookbehind === true);
   if (when === null) {
     return null;
   }
@@ -718,6 +725,7 @@ function readRule(value: unknown): RuleReadResult | null {
       when: when.predicate,
       then: then.actionSet,
       ...(fixtures === undefined ? {} : { fixtures }),
+      ...(value.regexLookbehind === true ? { regexLookbehind: true } : {}),
       ...(stopOnMatch === undefined || stopOnMatch === false ? {} : { stopOnMatch }),
       ...(runOn === undefined ? {} : { runOn }),
       ...(dryRun === undefined || dryRun === false ? {} : { dryRun }),
@@ -726,7 +734,7 @@ function readRule(value: unknown): RuleReadResult | null {
       || then.sanitized
       || id !== value.id
       || name !== value.name
-      || hasUnknownKeys(value, ["id", "name", "enabled", "priority", "order", "when", "then", "stopOnMatch", "runOn", "dryRun", "fixtures"]),
+      || hasUnknownKeys(value, ["id", "name", "enabled", "priority", "order", "when", "then", "stopOnMatch", "runOn", "dryRun", "fixtures", "regexLookbehind"]),
   };
 }
 
@@ -740,7 +748,7 @@ function readRunOn(value: unknown): RuleRunOn | null | undefined {
     : null;
 }
 
-function readPredicate(value: unknown): PredicateReadResult | null {
+function readPredicate(value: unknown, allowLookbehinds = false): PredicateReadResult | null {
   if (!isRecord(value) || typeof value.type !== "string") {
     return null;
   }
@@ -768,7 +776,7 @@ function readPredicate(value: unknown): PredicateReadResult | null {
         return null;
       }
       try {
-        compileRuleRegex(pattern);
+        compileRuleRegex(pattern, allowLookbehinds);
       } catch {
         return null;
       }
@@ -861,7 +869,7 @@ function readPredicate(value: unknown): PredicateReadResult | null {
         return null;
       }
       try {
-        compileRuleRegex(pattern);
+        compileRuleRegex(pattern, allowLookbehinds);
       } catch {
         return null;
       }
@@ -881,11 +889,11 @@ function readPredicate(value: unknown): PredicateReadResult | null {
       };
     }
     case "all":
-      return readPredicateArray(value.predicates, "all", hasUnknownKeys(value, ["type", "predicates"]));
+      return readPredicateArray(value.predicates, "all", hasUnknownKeys(value, ["type", "predicates"]), allowLookbehinds);
     case "any":
-      return readPredicateArray(value.predicates, "any", hasUnknownKeys(value, ["type", "predicates"]));
+      return readPredicateArray(value.predicates, "any", hasUnknownKeys(value, ["type", "predicates"]), allowLookbehinds);
     case "not": {
-      const result = readPredicate(value.predicate);
+      const result = readPredicate(value.predicate, allowLookbehinds);
       return result === null
         ? null
         : {
@@ -900,7 +908,7 @@ function readPredicate(value: unknown): PredicateReadResult | null {
         return null;
       }
       try {
-        compileRuleRegex(pattern);
+        compileRuleRegex(pattern, allowLookbehinds);
       } catch {
         return null;
       }
@@ -964,7 +972,7 @@ function readPredicate(value: unknown): PredicateReadResult | null {
         return null;
       }
       try {
-        compileRuleRegex(pattern);
+        compileRuleRegex(pattern, allowLookbehinds);
       } catch {
         return null;
       }
@@ -986,14 +994,14 @@ function readOptionalPositiveNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
-function readPredicateArray(value: unknown, type: "all" | "any", sanitized: boolean): PredicateReadResult | null {
+function readPredicateArray(value: unknown, type: "all" | "any", sanitized: boolean, allowLookbehinds = false): PredicateReadResult | null {
   if (!Array.isArray(value)) {
     return null;
   }
 
   const predicates: RulePredicate[] = [];
   for (const item of value) {
-    const result = readPredicate(item);
+    const result = readPredicate(item, allowLookbehinds);
     if (result === null) {
       return null;
     }
@@ -1120,6 +1128,7 @@ function cloneRule(rule: Rule): Rule {
     when: clonePredicate(rule.when),
     then: cloneActionSet(rule.then),
     ...(rule.fixtures === undefined ? {} : { fixtures: readRuleFixtures(rule.fixtures) ?? [] }),
+    ...(rule.regexLookbehind === true ? { regexLookbehind: true } : {}),
     ...(rule.stopOnMatch === undefined || rule.stopOnMatch === false ? {} : { stopOnMatch: rule.stopOnMatch }),
     ...(rule.runOn === undefined ? {} : { runOn: rule.runOn }),
     ...(rule.dryRun === undefined || rule.dryRun === false ? {} : { dryRun: rule.dryRun }),
