@@ -1,72 +1,66 @@
 # Vault Flow
 
-Vault Flow is an Obsidian plugin for deterministic, rule-based note organization. It plans and applies moves, renames, frontmatter updates, and frontmatter-tag changes using metadata, paths, tags, headings, note content, and file age.
+Vault Flow is an Obsidian plugin that organizes Markdown notes with rules. A rule can move or rename a note, update its properties, or change its frontmatter tags.
 
-Vault Flow is currently early-stage (`0.1.0`). Global dry-run is enabled by default. Review previews on a representative folder before allowing automatic writes.
+The plugin is still early (`0.1.0`). Dry-run mode is enabled by default. Start with a test folder and review the previews before allowing automatic writes.
 
-## Installation
+## Features
 
-Vault Flow is not yet listed in Obsidian's Community Plugins directory. Until it is listed, install only from a release published by this repository or build the plugin from source.
-
-### From a GitHub release
-
-1. Download `main.js`, `manifest.json`, and `styles.css` from the same [Vault Flow release](https://github.com/markfeinstein/obsidian-vault-flow/releases). Do not mix files from different versions.
-2. Create `<vault-config>/plugins/vault-flow/`, where `<vault-config>` is the vault configuration directory (normally `.obsidian`).
-3. Copy the three files into that folder.
-4. Reload Obsidian, open **Settings → Community plugins**, and enable **Vault Flow**.
-5. Keep global dry-run enabled and follow [Recommended First Run](#recommended-first-run).
-
-GitHub release tags are numeric versions such as `0.1.0` and must match the version in `manifest.json`.
-
-### From source
-
-Install the development requirements below, run `npm ci` followed by `npm run check`, then copy or symlink `main.js`, `manifest.json`, and `styles.css` into `<vault-config>/plugins/vault-flow/`. Never test file-mutation changes first against an irreplaceable vault.
+- Match notes by path, name, tags, properties, headings, body text, file age, or property dates.
+- Move and rename notes using fixed destinations or templates.
+- Set, initialize, append to, or delete properties.
+- Add, remove, or replace frontmatter tags without changing inline body tags.
+- Run rules on live changes, scheduled sweeps, or manual commands.
+- Preview one note, a folder, the whole vault, or the current result set of an Obsidian Base.
+- Detect stale previews and destination collisions before writing.
+- Pause writes, limit write rates, cancel the rest of a batch, and undo recent transactions when the note has not changed.
+- Inspect rule decisions, batch receipts, duplicate source URLs, and per-note rule traces.
 
 ## Requirements
 
-- Obsidian `1.14.4` or newer
+- Obsidian 1.14.4 or newer
 - Markdown notes stored inside the vault
-- Node.js `22.13.0` or newer for development
+- Node.js 22.13.0 or newer when building from source
 
-The plugin bundle is checked for browser/mobile compatibility, but physical-device mobile behavior has not yet been verified.
+The runtime bundle is checked for browser and mobile compatibility. Physical-device mobile testing is still pending.
 
-## Safety Model
+## Installation
 
-Vault Flow keeps automation inspectable and bounded:
+Vault Flow is not yet in the Community Plugins directory.
 
-- Global dry-run starts enabled.
-- Rules use declarative predicates and actions rather than arbitrary JavaScript.
-- Only in-vault Markdown files are processed; external files and protected configuration paths are rejected.
-- Monitored folders, exclusion globs, and a per-note disable property limit scope. Any truthy YAML value in the configured disable property protects the note, including nonempty strings, nonzero numbers, arrays, and objects; use `false`, `0`, an empty string, or no property to leave it eligible. Malformed scope settings disable automation without overwriting the settings file; they never silently become whole-vault scope.
-- A device-session pause parks queued work and blocks new apply/undo transactions. Use **Pause or resume writes (this device session)** or the Automation settings toggle. Resume explicitly; pause is not synced and resets when the plugin reloads.
-- Write limits default to **100 transaction starts per rolling minute** and **100 selected rows per reviewed apply batch**. Configure **Maximum writes per minute** and **Maximum batch writes** in Advanced settings. The rolling limit also counts undo and failed starts; reaching it pauses writes until explicit resume. Dry-run planning consumes no write budget.
-- Live writes are parked while the target note is active and resume when the active file changes. Activity is rechecked after waiting for the mutation lock and during destination-folder preparation. Manual runs remain explicit.
-- Disabling the plugin stops transactions that are still preparing. A transaction whose first note mutation has already started finishes or attempts rollback rather than abandoning a half-applied move/property update. Preparation may leave an empty destination folder.
-- Destination collisions can be skipped or resolved with a numeric suffix.
-- Vault-wide preview planning uses bounded concurrency, reports progress, can be cancelled, and allows row selection without changing global dry-run. Its apply table renders 100 pending rows per page and retains selections across pages.
-- Apply operations revalidate the preview baseline and serialize mutations before writing. **Cancel remaining** (or closing the preview) stops work before the next mutation; a transaction already writing finishes or attempts rollback. Apply progress reports applied/skipped/failed/remaining counts. Completed, cancelled, and stopped batches retain bounded device-local receipts.
-- Successful transactions retain before/after paths, complete frontmatter snapshots when properties changed, and a SHA-256 content/stat after-state fingerprint in a separate undo journal. Routine diagnostics cannot evict them. The journal retains at most 100 transactions, seven days, and 1 MiB of UTF-8 JSON; oversized transactions are not retained, and a notice reports that limitation. Undo, including path-only undo, rejects edited or replaced notes. If fingerprint capture fails, the write remains completed but undo is unavailable and a notice explains why.
-- Settings have a schema version. Data from a newer unsupported schema disables automation rather than being silently downgraded.
-- Runtime history, sweep state, and rule statistics use Obsidian's device-local storage instead of synced plugin settings.
+### From a GitHub release
 
-No plugin can make file automation risk-free. Keep backups or version history, test narrowly, and review Sync behavior before broad runs.
+1. Download `main.js`, `manifest.json`, and `styles.css` from the same [GitHub release](https://github.com/markfeinstein/obsidian-vault-flow/releases).
+2. Create `<vault-config>/plugins/vault-flow/`, where `<vault-config>` is usually `.obsidian`.
+3. Copy the three files into that folder.
+4. Reload Obsidian and enable **Vault Flow** under **Settings → Community plugins**.
 
-## Recommended First Run
+### From source
 
-1. Install or build Vault Flow.
-2. Leave **Dry run** enabled in Vault Flow settings.
-3. Set a monitored test folder.
-4. Add one narrowly scoped rule.
-5. Run **Vault Flow: Preview active note changes** on a known note.
-6. Run **Vault Flow: Preview vault changes** and select only the expected rows.
-7. Review **Vault Flow: Open diagnostics**.
-8. Disable global dry-run only after results are repeatable.
+```sh
+npm ci
+npm run check
+```
 
-Per-rule dry-run is also available. A matching dry-run rule reports its hypothetical mutations while leaving the note unchanged.
+Then copy or symlink `main.js`, `manifest.json`, and `styles.css` into `<vault-config>/plugins/vault-flow/`.
 
-## Rule Examples
+Do not test file-moving rules for the first time in an irreplaceable vault.
 
-Move notes tagged `#project` into `Projects`:
+## First run
+
+1. Leave **Dry run** enabled.
+2. Set a monitored test folder.
+3. Add one narrowly scoped rule.
+4. Run **Vault Flow: Preview active note changes** on a known note.
+5. Run **Vault Flow: Preview vault changes** and inspect the proposed paths and properties.
+6. Check **Vault Flow: Open diagnostics** if a result is unexpected.
+7. Disable dry-run only after the same rule produces repeatable results.
+
+A reviewed apply action writes the selected rows even when global dry-run is enabled. This is intentional: selecting rows and confirming the apply is the write authorization.
+
+## Rules
+
+Rules run by ascending `priority`, then `order`. A basic rule has this shape:
 
 ```json
 {
@@ -81,31 +75,15 @@ Move notes tagged `#project` into `Projects`:
 }
 ```
 
-Rename notes from a `title` property, but only during manual runs:
-
-```json
-{
-  "id": "rename-from-title",
-  "name": "Rename from title",
-  "enabled": true,
-  "priority": 20,
-  "order": 1,
-  "when": { "type": "frontmatterExists", "property": "title" },
-  "then": { "renameTo": "{title}" },
-  "runOn": "manual",
-  "dryRun": true
-}
-```
-
-Mark old drafts for review:
+A time-based rule can combine predicates and property updates:
 
 ```json
 {
   "id": "old-draft-review",
   "name": "Old draft review",
   "enabled": true,
-  "priority": 30,
-  "order": 2,
+  "priority": 20,
+  "order": 1,
   "when": {
     "type": "all",
     "predicates": [
@@ -121,125 +99,92 @@ Mark old drafts for review:
 }
 ```
 
-## Rule Model
+### Trigger contexts
 
-Rules are evaluated by ascending `priority`, then `order`. A rule contains `id`, `name`, `enabled`, `priority`, `order`, `when`, and `then`. Optional controls are:
+- `always`: every trigger
+- `live`: create, rename, or metadata changes while Obsidian is open
+- `sweep`: startup and periodic sweeps
+- `manual`: commands, previews, context menus, and the Vault Flow Bases view
 
-- `stopOnMatch`: stop the complete reconciliation after this rule applies.
-- `runOn`: limit the rule to a trigger context.
-- `dryRun`: evaluate and report hypothetical actions without applying them.
+A rule can also set `dryRun: true` or `stopOnMatch: true`. `stopOnMatch` stops the current reconciliation; it does not prevent a later live event from running the rule again.
 
-Supported `runOn` values:
-
-- `always`: every trigger.
-- `live`: metadata, create, or rename activity while Obsidian is open.
-- `sweep`: startup and periodic modification-time sweeps.
-- `manual`: commands, context menus, previews, and the Vault Flow Bases view.
-
-Supported predicates:
+### Predicates
 
 - Tags: `tag`, `tagPrefix`
 - Paths and names: `pathGlob`, `basename`
 - Body: `bodyH1`, `contentContains`, `contentRegex`, `wordCount`
-- Frontmatter: `frontmatterValue`, `frontmatterExists`, `frontmatterMissing`, `frontmatterContains`, `frontmatterRegex`, `frontmatterDateAge`
-- URLs and file time: `sourceUrl`, `fileAge`
+- Properties: `frontmatterValue`, `frontmatterExists`, `frontmatterMissing`, `frontmatterContains`, `frontmatterRegex`, `frontmatterDateAge`
+- Other: `sourceUrl`, `fileAge`
 - Composition: `all`, `any`, `not`
 
-Supported actions:
+### Actions
 
 - Paths: `moveTo`, `renameTo`
-- Frontmatter tags: `addTags`, `removeTags`, `replaceTags`
+- Tags: `addTags`, `removeTags`, `replaceTags`
 - Properties: `setProperties`, `deleteProperties`, `initProperties`, `appendToProperty`
 
-Inline body tags participate in matching, but tag actions modify only the frontmatter `tags` property. Tag matching and removal follow Obsidian's case-insensitive semantics while preserving the first existing display casing, and imported tag values are validated against Obsidian's documented tag format. Content and word-count predicates inspect the Markdown body after YAML frontmatter rather than treating properties as body text. Frontmatter values are limited to JSON scalars, arrays of scalars, and shallow objects with scalar values. Deeper YAML values are not exposed as rule values, but their keys and complete write baseline are tracked: unrelated writes preserve them, `initProperties` does not overwrite them, and an explicit `deleteProperties` action can remove them safely.
+Tag actions update only the frontmatter `tags` property. Inline tags in the note body are left alone. Rule property values can be JSON scalars, arrays of scalars, or shallow objects with scalar values; unrelated nested YAML is preserved when a note is updated.
 
-### Regex safety and compatibility
+Rename and destination templates support property placeholders, `{basename}`, `{folder}`, `{path}`, `{extension}`, `{now}`, `{now:FORMAT}`, `{today}`, `{date:FORMAT}`, and regex captures such as `{1}`. Use `{{` for a literal opening brace.
 
-Rule regexes use the bundled [RE2JS](https://github.com/le0pard/re2js) linear-time engine, not JavaScript's backtracking engine. Matching is case-insensitive. Patterns are limited to 512 characters and 10,000 compiled instructions, and compiled patterns are shared in a bounded cache. Capture groups, character classes, alternation, and greedy/lazy quantifiers are supported. Lookarounds and backreferences are not supported. RE2 syntax and Unicode/anchor semantics are not identical to JavaScript RegExp; for example, `$` means the end of input, not the position before a final newline.
+Set `moveToKind` to `folder` or `file` when the destination would otherwise be ambiguous. This matters for folder names containing dots, such as `Projects/Client.v2`.
 
-Unsupported patterns are rejected by the rule editor and imports. If existing saved settings contain an unsupported pattern, automation and settings writes are disabled, and a notice identifies the affected rule IDs. **The original settings file is not overwritten.** Back up `<vault-config>/plugins/vault-flow/data.json`, update those patterns there, then reload the plugin. Review existing regex rules in dry-run before upgrading; use literal `contentContains`/`frontmatterContains` predicates where possible. Linear-time matching prevents catastrophic backtracking, but very large notes and broad automatic rules still cost CPU.
+### Regular expressions
 
-Rename templates support `{property}`, `{basename}`, `{now}`, `{now:FORMAT}`, `{date:FORMAT}`, regex captures such as `{1}`, and `{{` for a literal `{`. Plain `{date}` reads the frontmatter `date` property; it is not an alias for today's date.
+User patterns run through the bundled RE2JS engine rather than JavaScript's backtracking regular expressions. Patterns are case-insensitive, limited to 512 characters and 10,000 compiled instructions, and cached in a bounded pool.
 
-Captures follow the branch that actually matched: `any` uses its first successful child; `all` uses the first nonempty basename/body capture set from successful children; `not` exports no captures. Failed and short-circuited branches cannot supply rename values.
+Lookarounds and backreferences are not supported. Existing unsupported patterns disable automation without overwriting the saved settings.
 
-Move actions can declare `moveToKind: "folder"` or `"file"`. Choose **Folder** in the rule editor for a folder containing dots, such as `Projects/Client.v2`; choose **Complete file path** for a path including the Markdown filename. Omitted/`"auto"` preserves legacy inference (a trailing slash or a final segment without a dot means a folder).
+## Write safety
 
-Settings now use schema version **3** so older builds cannot silently discard write limits; rule exports remain schema version **2**. Version-1/2 settings migrate with conservative write-limit defaults and preserve legacy destination inference. Version-1 rule imports still migrate. Back up settings before upgrading or downgrading.
+- Monitored folders, exclusion globs, and a per-note disable property control the processing scope.
+- Invalid scope settings disable automation instead of falling back to whole-vault access.
+- Live writes wait while the target note is active.
+- Planning and writing recheck the file path, metadata, body content when needed, settings revision, and destination collision state.
+- Mutations are serialized. If a property write fails after a rename, Vault Flow attempts to move the note back.
+- A device-local pause stops new writes. The default circuit breaker allows 100 transaction starts per rolling minute and 100 selected rows per reviewed batch.
+- Collision handling can skip the note or choose an available numeric suffix.
+- Closing an apply preview cancels rows that have not started. A transaction already writing is allowed to finish or roll back.
 
-Periodic sweeps reconsider unchanged notes when sweep/always rules cross file-age or property-date thresholds, or when a current-date path template would render a different value. They no longer re-plan every unchanged note on every interval merely because one time-dependent rule exists. Startup, clock rollback, and changed-settings revisions still force a complete monitored pass. Live/manual runs do not mark sweep-only rules as evaluated. Periodic evaluation requires **Periodic sweep** to be enabled; the plugin does not schedule background jobs while Obsidian is closed.
+Undo records are kept separately from diagnostics. Vault Flow retains up to 100 transactions for seven days, capped at 1 MiB. Before undoing, it checks the current path, file statistics, SHA-256 content fingerprint, and complete frontmatter after-state. If the note was edited, replaced, moved elsewhere, or deleted, undo is refused.
 
-The visual editor supports normal rules directly. Imported rules that cannot be represented without loss are kept in an advanced raw-JSON editor instead of being converted to a blank draft.
+Runtime history, batch receipts, sweep state, and rule statistics are stored in Obsidian's device-local plugin storage rather than synced settings.
 
-The editor and import report warn about potentially repeated appends and self-referential name/path templates. Editor saves require acknowledging these warnings, but never silently change the rule. Warnings are heuristics: a guarded rule may be intentional. `stopOnMatch` ends one reconciliation only; it does **not** prevent another live event after the rule's own write. Prefer a condition that becomes false after the intended change, or a manual-only rule for intentional one-shot appends.
+## Bases
 
-## Bases Integration
+The **Vault Flow plan** Bases view uses the Base's current filters, sorting, grouping, and result limit.
 
-Obsidian Bases can supply the files for a manual batch workflow:
+It can:
 
-1. Create or open a Base.
-2. Add the **Vault Flow plan** view.
-3. Filter, sort, group, and limit files with native Base controls. Vault Flow follows the current grouped and limited result set.
-4. Choose one planning mode in the view options:
-   - **Run Vault Flow manual rules** evaluates the current manual/always rules.
-   - **Move using a Base property or formula** reads a selected text, link, or file-valued source. Choose **Folder** or **Complete file path** explicitly, or retain **Auto (legacy)** for existing views. Unsupported lists, objects, dates, numbers, and booleans are reported instead of being coerced into folder names.
-   - **Rename using a Base text property or formula** uses the computed text as the basename, retaining the note's extension and folder.
-   - **Set a property using a Base value or formula** assigns the selected text, finite number, or boolean to the configured target property. Zero and false are preserved; unsupported types are rejected. For dates, use a formula that formats a Properties-compatible date string. The special `tags` property retains Vault Flow's existing merge semantics; use an explicit `replaceTags` rule for replacement.
+- run manual Vault Flow rules;
+- move notes using a text, link, file, or formula value;
+- rename notes using a text or formula value;
+- set a property from a text, finite number, or boolean value.
 
-   Formula-derived names and paths are literal values, not a second round of Vault Flow template evaluation.
-5. Choose a bounded page size, select planned rows, and choose **Open apply preview**.
-6. Recheck the rows, then choose **Apply selected**.
-
-Bases provides the filtered entry set and display context. Vault Flow caches unchanged plans, paginates rendering, respects native grouping, and rechecks the Base result/configuration snapshot through lock waits and preparation before the first write. Once writing starts, the reviewed selection is frozen so its own changes can update the query without invalidating the remaining rows. Each note still undergoes stale-baseline checks; use **Cancel remaining** if you change the Base criteria mid-batch. Active-note, vault, and Bases previews offer expandable before/after property details; errors show their reason, and failed Bases refreshes offer **Retry**. It still performs eligibility checks, planning, collision handling, per-note stale-baseline checks, serialized writes, diagnostics, and undo capture.
-
-## When To Use Built-In Obsidian Features Instead
-
-Vault Flow is for repeatable automation and reviewed batch mutations, not a replacement for Obsidian's organization tools. Start with the smallest native workflow that meets your need:
-
-| Need | Prefer built-in Obsidian | Use Vault Flow when… |
-| --- | --- | --- |
-| Find notes by tags, paths, properties, or text | [Search](https://obsidian.md/help/plugins/search); save frequently used searches with [Bookmarks](https://obsidian.md/help/plugins/bookmarks). | Matching should trigger a move, rename, or property action automatically. |
-| Inspect a filtered set of notes | [Bases](https://obsidian.md/help/bases) filters, sorting, grouping, formulas, and table/cards/list views. | You want to preview and apply rules to that Base result set. |
-| Track status or manually move files between folder columns | Native [Bases Kanban](https://obsidian.md/help/bases/views/kanban). Group by a note property to update it by dragging cards; **group by `file.folder` to move files between folders**. | A status change should trigger an automatic move, or destinations need calculation, collision handling, reviewed batches, or transaction undo. |
-| Insert standard properties and dates on demand | [Templates](https://obsidian.md/help/plugins/templates), optionally with Daily notes. Inserting a template also merges its properties into an existing note. | Initialization must be conditional, automatic, or applied across a reviewed batch. |
-| Edit metadata manually | [Properties](https://obsidian.md/help/properties), or native Base table cells with selection, copy/paste, and property undo/redo. Rename a property name from All Properties. Formula values are derived, not stored updates; general conditional bulk editing still needs another tool. | Changes must be conditional, repeated, or applied as a reviewed batch. |
-| Move or rename selected files once | [File Explorer](https://obsidian.md/help/plugins/file-explorer) and native move/rename commands. | Destinations or names should be derived from rules, properties, or formulas. |
-| Recover older note content | File recovery and, when enabled, Obsidian Sync version history. Keep independent backups too. | You want to reverse a specific recent Vault Flow transaction without overwriting newer frontmatter changes. Native recovery is a safety net, not a substitute for transaction undo. |
-
-### Let Bases select; let Vault Flow apply
-
-For manual workflows, keep selection logic in the Base rather than duplicating it in rule predicates. For example:
-
-1. Create a Base that filters project notes and groups them by `status`.
-2. Add a formula named `destination`: `if(note.status == "done", "Archive", "Projects")`.
-3. Add the **Vault Flow plan** view, choose **Move using a Base property or formula**, and select that formula.
-4. Review the plans, select rows, and open the apply preview. Pagination renders at most 100 pending rows at once; selections are retained across pages and the summary counts every selected page.
-5. Confirm **Apply selected** only after checking the proposed destinations. This explicit operation writes even if global dry-run is enabled.
-
-The current supported public 1.15 release also improves native Bases filter reordering and result-limit reporting. Vault Flow does not need a second filter editor to benefit from those improvements. The minimum remains 1.14.4; there is no need to raise it for this workflow. Bases still does not expose a supported headless query API for Vault Flow's live/startup/periodic automation.
+Select the rows you want, open the apply preview, and confirm the batch. Vault Flow rechecks the Base snapshot before the first write and validates each note again before changing it.
 
 ## Commands
 
-- **Vault Flow: Pause or resume writes (this device session)**
-- **Vault Flow: Reconcile active note**
-- **Vault Flow: Preview active note changes**
-- **Vault Flow: Reconcile entire vault**
-- **Vault Flow: Reconcile current folder**
-- **Vault Flow: Explain this note**
-- **Vault Flow: Show diagnostic log**
-- **Vault Flow: Open diagnostics**
-- **Vault Flow: Find duplicate source URLs**
-- **Vault Flow: Preview vault changes**
-- **Vault Flow: Show undo history**
-- **Vault Flow: Show apply batch receipts**
-- **Vault Flow: Export diagnostics to Markdown**
-- **Vault Flow: Export settings to clipboard**
+- **Pause or resume writes (this device session)**
+- **Reconcile active note**
+- **Preview active note changes**
+- **Reconcile entire vault**
+- **Reconcile current folder**
+- **Explain this note**
+- **Show diagnostic log**
+- **Open diagnostics**
+- **Find duplicate source URLs**
+- **Preview vault changes**
+- **Show undo history**
+- **Show apply batch receipts**
+- **Export diagnostics to Markdown**
+- **Export settings to clipboard**
 
-File and multi-file context menus also expose manual reconciliation for eligible Markdown files. Commands that need an active Markdown note are unavailable when their preconditions are not met.
+File and multi-file context menus also offer manual reconciliation for eligible Markdown files.
 
-### Obsidian CLI inspection
+## Obsidian CLI
 
-On Obsidian 1.14.4 or newer with the official CLI enabled, Vault Flow registers three read-only JSON commands:
+With the official Obsidian CLI enabled, Vault Flow provides three read-only JSON commands:
 
 ```sh
 obsidian vault="VAULT" vault-flow:status
@@ -247,23 +192,7 @@ obsidian vault="VAULT" vault-flow:diagnostics limit=20 outcome=error
 obsidian vault="VAULT" vault-flow:plan path="Inbox/Example.md" trigger=manual
 ```
 
-`vault-flow:plan` uses an exact vault-root path and evaluates `manual`, `live`, or `sweep` rules without writing. Its bounded summary includes paths, rule IDs, mutation kinds, and changed property names, but omits note bodies and property values. Diagnostics can still contain private paths and rule identifiers; review output before sharing. The Obsidian app must be running as required by the official CLI.
-
-## Diagnostics And Undo
-
-Recent decisions include outcomes, involved rules, mutations, desired paths, and transaction snapshots when a write occurred. History is device-local and bounded; it is not written to a hardcoded `.obsidian` path or synced as normal plugin settings.
-
-Runtime persistence failures produce a notice: in-memory undo may remain available, but it may not survive restart. The mtime cache and diagnostics view refreshes are batched to reduce large-scan overhead.
-
-**Export diagnostics to Markdown** creates a timestamped note through the Obsidian Vault API. Exported diagnostics can contain note paths and rule identifiers, so review them before sharing.
-
-**Explain this note** performs a fresh, read-only evaluation using the same planner and engine as automation. Switch between manual/live/sweep triggers to inspect predicate outcomes, short-circuited branches, exported captures, intermediate paths/property changes, missing template values, and convergence results. It shows up to 200 rule evaluations with lazy, bounded predicate details. This is a rules snapshot, not confirmation that collisions, write permissions, or unsaved editor text permit an actual write.
-
-Undo is optimistic rather than destructive: Vault Flow verifies the path, SHA-256 digest, creation/modification times, file size, and complete frontmatter after-state before restoring the recorded before-state. This is deliberately conservative: even body-only edits or automatic link updates can make an older transaction unavailable. Legacy records without a verified fingerprint cannot be undone. Keep native recovery and independent backups for broader recovery needs.
-
-**Undo batch** attempts retained members of a reviewed batch in reverse order, checking every note independently. It is not an all-or-nothing transaction: changed, replaced, missing, conflicting, or no-longer-retained notes are preserved, and write limits still apply.
-
-**Show apply batch receipts** displays per-batch totals and paginated per-row outcomes and actual destination paths. Stored receipts link to journal transactions by ID. Receipts retain at most 20 batches, seven days, and 256 KiB of UTF-8 JSON, with at most 2,000 detailed rows per batch; truncation is labelled. They omit note bodies and frontmatter snapshots but still contain private paths and error text. Receipts are finalized when a batch returns; a process crash can leave undo-journal transactions without a final batch receipt.
+The plan output contains paths, rule IDs, mutation kinds, and changed property names. It omits note bodies and property values. Diagnostics can still contain private paths and rule identifiers.
 
 ## Development
 
@@ -272,43 +201,34 @@ npm ci
 npm run check
 ```
 
-Useful scripts:
+Useful commands:
 
-- `npm run dev`: watch and rebuild `main.js`.
-- `npm run typecheck`: type-check against the declared Obsidian API.
-- `npm run lint`: run the recommended `eslint-plugin-obsidianmd` flat configuration plus project rules.
-- `npm test`: run the Vitest suite.
-- `npm run build`: type-check and create a production bundle.
-- `npm run verify:mobile-bundle`: bundle for a browser with only `obsidian` external, rejecting accidental Node.js or Electron dependencies.
-- `npm run check`: lint, type-check, test, verify metadata and mobile compatibility, and rebuild.
-- `npm run sync:version`: derive `manifest.json` and `versions.json` from `package.json`.
-- `npm run test:obsidian:prepare`: create a fresh synthetic test vault without launching Obsidian.
-- `npm run test:obsidian -- --root … --vault … --cli … --allow-runtime`: explicitly opt into the isolated desktop smoke driver after manually opening the generated vault. The driver validates the exact generated path and bundle before touching UI or notes, writes its evidence into that fixture, and never treats mock-CLI tests as real-app verification.
+- `npm run dev`: watch and rebuild `main.js`
+- `npm run lint`: run ESLint
+- `npm run typecheck`: run TypeScript without emitting files
+- `npm test`: run the Vitest suite
+- `npm run bundle`: rebuild the production `main.js`
+- `npm run verify:mobile-bundle`: reject accidental Node.js or Electron runtime dependencies
+- `npm run verify:versions`: check version metadata
+- `npm run sync:version`: update `manifest.json` and `versions.json` from `package.json`
+- `npm run test:obsidian:prepare`: create an isolated synthetic test vault
+- `npm run test:obsidian -- --root … --vault … --cli … --allow-runtime`: run the opt-in desktop smoke driver against that exact generated vault
 
-Copy or symlink `main.js`, `manifest.json`, and `styles.css` into `<vault-config>/plugins/vault-flow/` for local testing.
+`main.js` is generated but committed because it is a release asset.
 
 ## Releases
 
-Version metadata has one source of truth: `package.json`.
+`package.json` is the version source of truth. Release tags are numeric versions such as `0.1.0` and must match `manifest.json`. The release workflow checks the build and publishes `main.js`, `manifest.json`, and `styles.css`.
 
-1. Run `npm version <patch|minor|major>`. The lifecycle check runs the full suite, then updates `manifest.json` and `versions.json`.
-2. Review and push the generated version commit and its numeric tag (for example, `0.2.0`; do not prefix it with `v`).
-3. The release workflow validates that the tag exactly matches `manifest.json`, audits dependencies, rebuilds the tracked bundle, and publishes an immutable release. It refuses to overwrite an existing release tag or its assets:
-   - `main.js`
-   - `manifest.json`
-   - `styles.css`
+## Known limitations
 
-Pull requests and pushes to `main` run the same checks on the minimum supported Node line and current Node.
-
-## Known Limitations
-
-- Only Markdown files are processed. Canvas support is intentionally not advertised or partially enabled.
-- Vault-wide changes are not atomic across multiple files; each selected note is validated and transacted independently.
-- Undo history is bounded and device-local (100 transactions, seven days, 1 MiB). Native File recovery, Sync history, and independent backups remain necessary.
-- Native Bases has no supported headless query API, so live and sweep automation continue to use Vault Flow's planner rather than a Base query.
-- Rule and exclusion globs use a linear-time matcher, have a 1,024-character limit, and retain the `*`, `**`, and `?` dialect. Invalid saved patterns disable automation and settings writes without overwriting the original settings. Matching uses RE2 Unicode case-insensitive semantics.
-- User regexes use linear-time RE2-compatible syntax rather than the full JavaScript RegExp syntax. Scope full-content automatic rules narrowly; large inputs can still be expensive.
-- The synthetic Obsidian 1.15.1 desktop smoke flow has been exercised, but minimum-version desktop, physical mobile devices, Sync, external-file views, pop-out windows, accessibility, and very large vaults still need real-application verification before a public release.
+- Only Markdown files are processed.
+- A multi-file batch is not one atomic transaction; each note is validated and written independently.
+- Undo history is bounded and device-local. Keep backups or version history.
+- Bases does not expose a supported headless query API, so live and sweep automation use Vault Flow's own planner.
+- Globs use the `*`, `**`, and `?` dialect and are limited to 1,024 characters.
+- Regexes use RE2-compatible syntax rather than the full JavaScript RegExp syntax.
+- The synthetic Obsidian 1.15.1 desktop smoke flow has been exercised. Minimum-version desktop, physical mobile devices, Sync, external-file views, pop-out windows, accessibility, and very large vaults still need real-application testing.
 
 ## License
 
