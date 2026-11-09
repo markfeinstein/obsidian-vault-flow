@@ -31,6 +31,7 @@ import {
 } from "./rule-editor-model";
 import { formatRuleExport, formatRuleImportReport, MAX_RULE_IMPORT_TEXT_LENGTH, parseRuleImport, type RuleImportDetails } from "./rule-io";
 import { sanitizeRules, type CollisionPolicy, type VaultFlowSettings } from "./settings";
+import { mergeRuleEdit } from "./rule-edits";
 
 export interface VaultFlowSettingsHost {
   getSettings(): VaultFlowSettings;
@@ -470,15 +471,18 @@ export class VaultFlowSettingTab extends PluginSettingTab {
   }
 
   private openRuleEditor(existingRule: Rule | null): void {
+    const baseline = this.host.getSettings().rules;
     new RuleEditorModal(
       this.app,
       existingRule,
-      this.host.getSettings().rules,
+      baseline,
       async (result) => {
-        if (result.status === "ok") {
-          await this.host.updateSettings({ rules: result.rules });
-          this.update();
-        }
+        if (result.status !== "ok") return false;
+        const merged = mergeRuleEdit(this.host.getSettings().rules, baseline, result.rules);
+        if (merged.status === "error") { new Notice(merged.error); return false; }
+        await this.host.updateSettings({ rules: merged.rules });
+        this.update();
+        return true;
       },
     ).open();
   }
@@ -586,7 +590,7 @@ class RuleEditorModal extends Modal {
     app: App,
     private readonly existingRule: Rule | null,
     private readonly allRules: readonly Rule[],
-    private readonly onSave: (result: RuleEditResult) => Promise<void>,
+    private readonly onSave: (result: RuleEditResult) => Promise<boolean | void>,
   ) {
     super(app);
     const visualDraft = existingRule === null ? createDefaultRuleDraft(allRules) : draftFromRule(existingRule);
@@ -822,7 +826,7 @@ class RuleEditorModal extends Modal {
 
     new Setting(this.contentEl)
       .setName("Delete properties")
-      .setDesc("Comma- or space-separated frontmatter property names to delete entirely.")
+      .setDesc('JSON string array or comma-separated property names. Spaces inside names are preserved, e.g. ["due date", "legacy_field"].')
       .addText((text) => {
         text
           .setPlaceholder("legacy_field, old_status")
@@ -851,8 +855,7 @@ class RuleEditorModal extends Modal {
               ? !this.allRules.some((existing) => existing.id === rule.id) : rule.id === this.existingRule.id);
             const warnings = candidate === undefined ? [] : ruleConvergenceWarnings(candidate);
             if (warnings.length > 0 && !(await confirmAction(this.app, "Review rule repetition warnings", warnings.join("\n\n"), "Save rule anyway"))) return;
-            await this.onSave(result);
-            this.close();
+            if (await this.onSave(result) !== false) this.close();
           });
       })
       .addButton((btn) => {
@@ -899,11 +902,10 @@ class RuleEditorModal extends Modal {
             const replacement = { ...parsedRule, id: this.existingRule.id };
             const warnings = ruleConvergenceWarnings(replacement);
             if (warnings.length > 0 && !(await confirmAction(this.app, "Review rule repetition warnings", warnings.join("\n\n"), "Save rule anyway"))) return;
-            await this.onSave({
+            if (await this.onSave({
               status: "ok",
               rules: this.allRules.map((rule) => rule.id === this.existingRule?.id ? replacement : rule),
-            });
-            this.close();
+            }) !== false) this.close();
           });
       })
       .addButton((btn) => {
@@ -1440,8 +1442,8 @@ class PresetRulesModal extends Modal {
         const newPreset: Rule = {
           ...preset,
           id: newId,
-          priority: currentRules.length,
-          order: currentRules.length,
+          priority: currentRules.length === 0 ? 0 : Math.max(...currentRules.map((rule) => rule.priority)) + 1,
+          order: currentRules.length === 0 ? 0 : Math.max(...currentRules.map((rule) => rule.order)) + 1,
         };
         await this.host.updateSettings({ rules: [...currentRules, newPreset] });
           new Notice(`Vault Flow: added preset "${preset.name}".`);

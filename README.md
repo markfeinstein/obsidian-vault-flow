@@ -129,6 +129,12 @@ Rename and destination templates support property placeholders, `{basename}`, `{
 
 Set `moveToKind` to `folder` or `file` when the destination would otherwise be ambiguous. This matters for folder names containing dots, such as `Projects/Client.v2`.
 
+### Editing rules safely
+
+Property equality values accept JSON scalars: use `"001"` or `"true"` for text, and `1` or `true` for numbers and booleans. Existing value types are preserved when editing. Delete-property lists accept a JSON string array (recommended for names containing commas) or comma-separated names; spaces within a name are preserved. Every nonempty numeric bound must be valid before saving.
+
+Adding a rule leaves existing execution priorities unchanged. If settings sync while an editor is open, unrelated rule changes are retained; a conflicting change to the edited rule must be resolved by reopening it.
+
 ### Regular expressions
 
 User patterns run through the bundled RE2JS engine rather than JavaScript's backtracking regular expressions. Patterns are case-insensitive, limited to 512 characters and 10,000 compiled instructions, and cached in a bounded pool.
