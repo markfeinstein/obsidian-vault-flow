@@ -24,7 +24,15 @@ export class RecoveryModal extends Modal {
       details.createEl("pre", { text: JSON.stringify({ before: entry.beforeFrontmatter, after: entry.afterFrontmatter }, null, 2) });
       const buttons = info.createDiv({ cls: "vf-preview-controls" });
       const open = buttons.createEl("button", { text: "Open current destination note" });
-      open.onclick = async () => { await this.app.workspace.openLinkText(entry.afterPath, "", true); };
+      open.onclick = async () => {
+        const file = this.app.vault.getFileByPath(entry.afterPath);
+        if (file === null) {
+          new Notice("The destination note no longer exists at this exact path.");
+          return;
+        }
+        try { await this.app.workspace.getLeaf(true).openFile(file); }
+        catch { new Notice("Could not open the existing destination note. Inspect its current path manually."); }
+      };
       const copy = buttons.createEl("button", { text: "Copy recovery snapshot (includes properties)" });
       copy.onclick = async () => {
         try { await navigator.clipboard.writeText(JSON.stringify(entry, null, 2)); new Notice("Recovery snapshot copied. Store it securely."); }
