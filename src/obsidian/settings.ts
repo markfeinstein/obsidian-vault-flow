@@ -1,4 +1,5 @@
 import { compileRuleRegex } from "../engine/rule-regex";
+import { ruleInputLimitError } from "../engine/rule-limits";
 import { compilePathGlob } from "../engine/path-glob";
 import { readRuleFixtures } from "../engine/rule-fixtures";
 import { normalizePath } from "obsidian";
@@ -48,6 +49,7 @@ export interface SanitizedVaultFlowSettings {
   readonly incompatibleVersion?: number;
   readonly regexErrors?: readonly string[];
   readonly scopeErrors?: readonly string[];
+  readonly ruleErrors?: readonly string[];
 }
 
 export interface VaultFlowRuntimeState {
@@ -103,6 +105,8 @@ export function sanitizeVaultFlowSettings(data: unknown, defaults: VaultFlowSett
       incompatibleVersion: data.settingsVersion,
     };
   }
+  const ruleLimitError = ruleInputLimitError(settingsSource.rules);
+  if (ruleLimitError !== null) return { settings: cloneSettings(defaults), sanitized: false, ruleErrors: [ruleLimitError] };
   if (data.settingsVersion !== undefined && data.settingsVersion !== SETTINGS_SCHEMA_VERSION) {
     sanitized = true;
   }
@@ -640,6 +644,7 @@ interface PredicateReadResult {
 }
 
 export function sanitizeRules(value: unknown, fallback: readonly Rule[] = []): RulesResult {
+  if (ruleInputLimitError(value ?? fallback) !== null) return { rules: [], sanitized: true };
   if (value === undefined) {
     return { rules: fallback.map(cloneRule), sanitized: false };
   }

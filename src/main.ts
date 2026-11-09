@@ -83,7 +83,7 @@ export default class VaultFlowPlugin extends Plugin {
     this.loaded = true;
     const rawData: unknown = await this.loadData();
     const sanitizedSettings = sanitizeVaultFlowSettings(rawData, DEFAULT_SETTINGS);
-    this.settingsReadOnly = sanitizedSettings.incompatibleVersion !== undefined || sanitizedSettings.regexErrors !== undefined || sanitizedSettings.scopeErrors !== undefined;
+    this.settingsReadOnly = sanitizedSettings.incompatibleVersion !== undefined || sanitizedSettings.regexErrors !== undefined || sanitizedSettings.scopeErrors !== undefined || sanitizedSettings.ruleErrors !== undefined;
 
     const legacyRuntime: VaultFlowRuntimeState = {
       trackedMtimes: sanitizedSettings.settings.trackedMtimes,
@@ -113,7 +113,9 @@ export default class VaultFlowPlugin extends Plugin {
     }
 
     if (this.settingsReadOnly) {
-      new Notice(sanitizedSettings.scopeErrors !== undefined
+      new Notice(sanitizedSettings.ruleErrors !== undefined
+        ? `Vault Flow automation is disabled: ${sanitizedSettings.ruleErrors.join(" ")} Settings were not overwritten. Correct data.json and reload the plugin.`
+        : sanitizedSettings.scopeErrors !== undefined
         ? `Vault Flow automation is disabled: invalid scope settings (${sanitizedSettings.scopeErrors.join(", ")}). Settings were not overwritten. Correct data.json and reload the plugin.`
         : sanitizedSettings.regexErrors !== undefined
         ? `Vault Flow automation is disabled: unsupported regex or glob in ${sanitizedSettings.regexErrors.join(", ")}. Settings were not overwritten. Update these patterns in data.json and reload the plugin.`
@@ -597,13 +599,15 @@ export default class VaultFlowPlugin extends Plugin {
       recentDecisions: this.settings.recentDecisions,
       ruleStats: this.settings.ruleStats,
     };
-    this.settingsReadOnly = sanitized.incompatibleVersion !== undefined || sanitized.regexErrors !== undefined || sanitized.scopeErrors !== undefined;
+    this.settingsReadOnly = sanitized.incompatibleVersion !== undefined || sanitized.regexErrors !== undefined || sanitized.scopeErrors !== undefined || sanitized.ruleErrors !== undefined;
     this.settings = { ...sanitized.settings, ...runtimeState };
     this.settingsRevision += 1;
     this.configurePeriodicSweep();
     this.updateStatusBar();
     if (this.settingsReadOnly) {
-      new Notice(sanitized.scopeErrors !== undefined
+      new Notice(sanitized.ruleErrors !== undefined
+        ? `Vault Flow automation is disabled: ${sanitized.ruleErrors.join(" ")} Settings were not overwritten.`
+        : sanitized.scopeErrors !== undefined
         ? `Vault Flow automation is disabled: invalid scope settings (${sanitized.scopeErrors.join(", ")}). Settings were not overwritten.`
         : sanitized.regexErrors !== undefined
         ? `Vault Flow automation is disabled: unsupported regex or glob in ${sanitized.regexErrors.join(", ")}. Settings were not overwritten. Update these patterns in data.json and reload the plugin.`
@@ -647,6 +651,10 @@ export default class VaultFlowPlugin extends Plugin {
     }
     const previousSettings = this.settings;
     const sanitizedSettings = sanitizeVaultFlowSettings({ ...this.settings, ...settings }, DEFAULT_SETTINGS);
+    if (sanitizedSettings.ruleErrors !== undefined) {
+      new Notice(`Vault Flow did not save settings: ${sanitizedSettings.ruleErrors.join(" ")}`);
+      return;
+    }
     if (sanitizedSettings.scopeErrors !== undefined) {
       new Notice(`Vault Flow did not save invalid scope settings: ${sanitizedSettings.scopeErrors.join(", ")}.`);
       return;
