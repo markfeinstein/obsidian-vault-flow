@@ -31,11 +31,20 @@ export interface ReconciliationQueueCallbacks {
   readonly recordDecision?: (decision: ReconciliationDecision) => void | Promise<void>;
   readonly onSnapshotChange?: (snapshot: ReconciliationQueueSnapshot) => void;
   readonly shouldDeferLiveWrite?: (file: TFile) => boolean;
-  readonly onReconciled?: (file: TFile, context: { readonly triggerContexts: readonly RuleRunOn[]; readonly revision: number }) => void | Promise<void>;
+  readonly onReconciled?: (file: TFile, context: QueueEvaluationContext) => void | Promise<void>;
+  readonly onFailed?: (file: TFile, context: QueueEvaluationContext & { readonly mutationStarted: boolean }) => void | Promise<void>;
   readonly runExclusive?: <T>(operation: () => Promise<T>) => Promise<T>;
   readonly now?: () => number;
   readonly onMutationStarted?: Parameters<typeof applyReconciliationResult>[5];
   readonly onMutationFinished?: Parameters<typeof applyReconciliationResult>[6];
+}
+
+export interface QueueEvaluationContext {
+  readonly path: string;
+  readonly triggerContexts: readonly RuleRunOn[];
+  readonly revision: number;
+  /** Conservative beginning of the evaluation, not the later write completion. */
+  readonly evaluatedAt: number;
 }
 
 type ReconciliationCompletion = "reconciled" | "deferred" | "failed";
@@ -53,6 +62,7 @@ export class ReconciliationQueue {
   private readonly deferredFiles = new Map<string, PendingEntry>();
   private readonly readyPaths = new Set<string>();
   private readonly runningPaths = new Set<string>();
+  private readonly mutationStartedPaths = new Set<string>();
   private readonly cancellationVersions = new Map<string, number>();
   private readonly expectedRenamePaths = new Map<string, number>();
   private readonly contentReadFailures = new Map<string, number>();
@@ -210,15 +220,18 @@ export class ReconciliationQueue {
     this.runningPaths.add(path);
     this.notifySnapshotChanged();
 
+    const context: QueueEvaluationContext = { path, triggerContexts: entry.triggerContexts,
+      revision: this.getOptions().revision ?? 0, evaluatedAt: this.now() };
     try {
-      const revision = this.getOptions().revision ?? 0;
       const completion = await this.reconcile(path, entry.file, entry.triggerContexts, generation, cancellationVersion);
       if (completion === "reconciled") this.contentReadFailures.delete(path);
-      if (completion === "reconciled" && !this.isStale(path, generation, cancellationVersion)) {
-        await this.callbacks.onReconciled?.(entry.file, { triggerContexts: entry.triggerContexts, revision });
+      if (!this.isStale(path, generation, cancellationVersion)) {
+        if (completion === "reconciled") await this.callbacks.onReconciled?.(entry.file, context);
+        if (completion === "failed") await this.callbacks.onFailed?.(entry.file, { ...context, mutationStarted: this.mutationStartedPaths.has(path) });
       }
     } catch (error) {
       if (!this.isStale(path, generation, cancellationVersion)) {
+        await this.callbacks.onFailed?.(entry.file, { ...context, mutationStarted: this.mutationStartedPaths.has(path) });
         const message = formatError(error);
         await this.recordDecision({
           timestamp: this.now(),
@@ -233,6 +246,7 @@ export class ReconciliationQueue {
         new Notice(`Vault Flow failed to reconcile ${entry.file.path}: ${message}`);
       }
     } finally {
+      this.mutationStartedPaths.delete(path);
       this.runningPaths.delete(path);
       this.notifySnapshotChanged();
       this.pump();
@@ -386,7 +400,7 @@ export class ReconciliationQueue {
         message,
       });
       new Notice(`Vault Flow could not reconcile ${file.path}: ${message}`);
-      return "reconciled";
+      return "failed";
     }
 
     const dryRunMatches = result.dryRunMatches ?? [];
@@ -437,7 +451,7 @@ export class ReconciliationQueue {
         message,
       });
       new Notice(`Vault Flow could not reconcile ${file.path}: ${message}`);
-      return "reconciled";
+      return "failed";
     }
 
     if (options.dryRun) {
@@ -524,7 +538,10 @@ export class ReconciliationQueue {
           if (!sameNoteStateBaseline(latestCurrent.current, baseline)) {
             throw new TransactionInterruptedError("changed");
           }
-        }, (pending) => this.callbacks.onMutationStarted?.(pending), (transaction) => this.callbacks.onMutationFinished?.(transaction));
+        }, (pending) => {
+          this.callbacks.onMutationStarted?.(pending);
+          this.mutationStartedPaths.add(path);
+        }, (transaction) => this.callbacks.onMutationFinished?.(transaction));
         return {
           status: "applied",
           current: latestCurrent.current,
@@ -569,7 +586,7 @@ export class ReconciliationQueue {
       return "reconciled";
     }
     if (execution.status === "collision-skipped") {
-      return "reconciled";
+      return "failed";
     }
     if (execution.status === "read-failed") {
       const failureCount = this.incrementContentReadFailure(path);
