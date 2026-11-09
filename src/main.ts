@@ -3,6 +3,9 @@ import type { BasesAllOptions, TAbstractFile } from "obsidian";
 import { isMarkdownFile, isProcessableFile as isSupportedNote, validateVaultPath, type AppliedReconciliationTransaction } from "./obsidian/adapter";
 import { TransactionJournal, type JournalEntry, type PendingNoteMutation } from "./obsidian/transaction-journal";
 import { RecoveryModal } from "./obsidian/recovery-modal";
+import { WorkInboxModal } from "./obsidian/work-inbox-modal";
+import { buildWorkInbox, type WorkInboxItem } from "./obsidian/work-inbox";
+import type { RuleRunOn } from "./engine";
 import { mapWithConcurrency } from "./obsidian/concurrency";
 import { compactPreviewPlan } from "./obsidian/preview-snapshot";
 import { unknownValuesEqual } from "./engine/value-utils";
@@ -166,7 +169,7 @@ export default class VaultFlowPlugin extends Plugin {
           }
         },
         onFailed: (_file, context) => {
-          if (context.mutationStarted) this.writeSafety.pause("A note mutation failed; inspect pending-write recovery before resuming");
+          if (context.mutationStarted) this.pauseAfterMutationFailure();
         },
         runExclusive: async (operation) => this.mutationCoordinator.runExclusive(operation),
         onMutationStarted: (pending) => this.startJournal(pending),
@@ -199,13 +202,14 @@ export default class VaultFlowPlugin extends Plugin {
         getSettingsRevision: () => this.settingsRevision,
         previewCallbacks: {
           collisionPolicy: () => this.settings.collisionPolicy,
-          recordDecision: async (decision) => this.recordDecision(decision),
+          recordDecision: async (decision) => this.recordDecision({ ...decision, triggerContexts: ["manual"] }),
           runExclusive: async (operation) => this.mutationCoordinator.runExclusive(operation),
           recordBatch: (receipt) => this.recordBatch(receipt),
           assertCanApply: () => this.assertAutomationEnabled(),
           maxBatchWrites: () => this.settings.maxBatchWrites,
           onMutationStarted: (pending) => this.startJournal(pending),
           onMutationFinished: (transaction) => this.finishJournal(transaction),
+          onMutationFailed: () => this.pauseAfterMutationFailure(),
         },
       }),
       options: (config): BasesAllOptions[] => [
@@ -316,9 +320,13 @@ export default class VaultFlowPlugin extends Plugin {
     this.addCommand({
       id: "inspect-write-recovery",
       name: "Inspect pending-write recovery",
-      callback: () => new RecoveryModal(this.app, () => this.journal?.entries() ?? [],
-        async (entry) => this.restoreRecoveredHistory(entry), async (id) => { await this.mutationCoordinator.runExclusive(async () => { this.journal?.acknowledge(id); }); },
-        this.journal?.blockedReason ?? null).open(),
+      callback: () => this.openWriteRecovery(),
+    });
+
+    this.addCommand({
+      id: "show-work-inbox",
+      name: "Show failed-work inbox",
+      callback: () => this.openWorkInbox(),
     });
 
     this.addCommand({
@@ -820,7 +828,35 @@ export default class VaultFlowPlugin extends Plugin {
     }
   }
 
-  private async openVaultPreview(files: readonly TFile[]): Promise<void> {
+  private openWriteRecovery(): void {
+    new RecoveryModal(this.app, () => this.journal?.entries() ?? [], async (entry) => this.restoreRecoveredHistory(entry),
+      async (id) => { await this.mutationCoordinator.runExclusive(async () => { this.journal?.acknowledge(id); }); }, this.journal?.blockedReason ?? null).open();
+  }
+
+  private openWorkInbox(): void {
+    new WorkInboxModal(this.app, () => buildWorkInbox(this.settings.recentDecisions, this.journal?.entries() ?? [], [...this.pendingSweepPaths]), {
+      replan: async (item) => this.replanInboxItem(item),
+      openRecovery: () => this.openWriteRecovery(),
+      openNote: async (path) => {
+        const file = this.app.vault.getFileByPath(path);
+        if (file === null || !isSupportedNote(file)) throw new Error("The vault note no longer exists at this exact path.");
+        await this.app.workspace.openLinkText(file.path, "", true);
+      },
+    }).open();
+  }
+
+  private async replanInboxItem(item: WorkInboxItem): Promise<void> {
+    if (!this.loaded || this.settingsReadOnly) throw new Error("Compatible, loaded settings are required to replan.");
+    if (this.journal?.blockedReason || this.journal?.entries().some((entry) => entry.beforePath === item.path || entry.afterPath === item.path)) {
+      this.openWriteRecovery();
+      return;
+    }
+    const file = this.app.vault.getFileByPath(item.path);
+    if (file === null || !isSupportedNote(file)) throw new Error("The vault note no longer exists at this exact path.");
+    await this.openVaultPreview([file], item.triggerContexts);
+  }
+
+  private async openVaultPreview(files: readonly TFile[], triggerContexts: readonly RuleRunOn[] = ["manual"]): Promise<void> {
     const progress = new VaultPlanningProgressModal(this.app, files.length);
     progress.open();
     let cancelled = false;
@@ -835,7 +871,7 @@ export default class VaultFlowPlugin extends Plugin {
           this.app,
           file,
           settings,
-          { now, triggerContext: "manual" },
+          { now, triggerContext: triggerContexts },
         )),
         {
           retainResult: (plan) => !["unchanged", "excluded"].includes(plan.preview.outcome),
@@ -870,7 +906,7 @@ export default class VaultFlowPlugin extends Plugin {
         {
           collisionPolicy: () => this.settings.collisionPolicy,
           recordDecision: async (decision) => {
-            await this.recordDecision(decision);
+            await this.recordDecision({ ...decision, triggerContexts });
           },
           runExclusive: async (operation) => this.mutationCoordinator.runExclusive(operation),
           recordBatch: (receipt) => this.recordBatch(receipt),
@@ -878,6 +914,7 @@ export default class VaultFlowPlugin extends Plugin {
           maxBatchWrites: () => this.settings.maxBatchWrites,
           onMutationStarted: (pending) => this.startJournal(pending),
           onMutationFinished: (transaction) => this.finishJournal(transaction),
+          onMutationFailed: () => this.pauseAfterMutationFailure(),
         },
       ).open();
     } catch (error) {
@@ -1024,6 +1061,10 @@ export default class VaultFlowPlugin extends Plugin {
     this.scheduleDiagnosticsRefresh();
     this.updateStatusBar();
     return Promise.resolve();
+  }
+
+  private pauseAfterMutationFailure(): void {
+    this.writeSafety.pause("A note mutation failed; inspect pending-write recovery before resuming");
   }
 
   private startJournal(pending: PendingNoteMutation): void {

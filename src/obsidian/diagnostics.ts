@@ -1,8 +1,13 @@
-import type { PlannedMutation, RuleId } from "../engine";
+import type { PlannedMutation, RuleId, RuleRunOn } from "../engine";
 import type { NoteIdentity } from "./note-identity";
 
 export type ReconciliationDecisionOutcome = "changed" | "unchanged" | "dry-run" | "skipped" | "cycle-detected" | "max-iterations-exceeded" | "error" | "undone";
 export type DiagnosticLogOutcomeFilter = ReconciliationDecisionOutcome | "all";
+export const WORK_ISSUE_KINDS = ["metadata", "read", "planning", "collision", "stale", "active", "mutation"] as const;
+export type WorkIssueKind = typeof WORK_ISSUE_KINDS[number];
+export function isWorkIssueKind(value: unknown): value is WorkIssueKind {
+  return WORK_ISSUE_KINDS.some((kind) => kind === value);
+}
 
 export const DIAGNOSTIC_LOG_OUTCOME_FILTERS: readonly DiagnosticLogOutcomeFilter[] = [
   "all",
@@ -26,6 +31,8 @@ export interface ReconciliationDecision {
   readonly iterations: number;
   readonly desiredPath?: string;
   readonly message?: string;
+  readonly issueKind?: WorkIssueKind;
+  readonly triggerContexts?: readonly RuleRunOn[];
   readonly beforeFrontmatter?: Record<string, unknown>;
   readonly afterFrontmatter?: Record<string, unknown>;
   readonly dryRunRuleIds?: readonly RuleId[];
@@ -174,6 +181,8 @@ export function cloneDecision(decision: ReconciliationDecision): ReconciliationD
     iterations: decision.iterations,
     ...(decision.desiredPath === undefined ? {} : { desiredPath: decision.desiredPath }),
     ...(decision.message === undefined ? {} : { message: decision.message }),
+    ...(decision.issueKind === undefined ? {} : { issueKind: decision.issueKind }),
+    ...(decision.triggerContexts === undefined ? {} : { triggerContexts: [...decision.triggerContexts] }),
     ...(decision.beforeFrontmatter === undefined ? {} : { beforeFrontmatter: cloneRecord(decision.beforeFrontmatter) }),
     ...(decision.afterFrontmatter === undefined ? {} : { afterFrontmatter: cloneRecord(decision.afterFrontmatter) }),
     ...(decision.dryRunRuleIds === undefined ? {} : { dryRunRuleIds: [...decision.dryRunRuleIds] }),

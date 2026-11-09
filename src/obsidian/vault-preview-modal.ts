@@ -1,7 +1,7 @@
 import { ConfirmationModal, Modal, Notice, type App, type TFile } from "obsidian";
 import type { NoteState, ReconciliationConverged } from "../engine";
 import { applyReconciliationResult, noteStateFromObsidian, resolveMoveCollision } from "./adapter";
-import { createTransactionId, type ReconciliationDecision } from "./diagnostics";
+import { createTransactionId, type ReconciliationDecision, type WorkIssueKind } from "./diagnostics";
 import type { DryRunPreviewPlan } from "./dry-run-preview";
 import { sameNoteStateBaseline } from "./note-state";
 import { reserveBatchDestinations } from "./batch-destinations";
@@ -34,6 +34,7 @@ export interface VaultPreviewApplyCallbacks {
   readonly maxBatchWrites?: () => number;
   readonly onMutationStarted?: Parameters<typeof applyReconciliationResult>[5];
   readonly onMutationFinished?: Parameters<typeof applyReconciliationResult>[6];
+  readonly onMutationFailed?: () => void;
   readonly recordBatch?: (receipt: BatchReceipt) => void | Promise<void>;
 }
 
@@ -277,7 +278,8 @@ export class VaultPreviewModal extends Modal {
         } catch (error) {
           if (error instanceof ApplyCancelledError) break;
           outcome = "failed";
-          stopped = error instanceof WriteSafetyError || error instanceof ApplyStoppedError;
+          stopped = error instanceof WriteSafetyError || error instanceof ApplyStoppedError || this.entryStarted;
+          if (this.entryStarted) this.callbacks.onMutationFailed?.();
           await this.recordError(entry, `Preview apply failed: ${formatError(error)}`);
         }
         if (outcome === "applied") applied += 1;
@@ -327,7 +329,7 @@ export class VaultPreviewModal extends Modal {
 
     const currentState = await currentStateForPreviewApply(this.app, file, entry.preview.current, entry.preview.needsBodyContent);
     if (currentState.status === "failed") {
-      await this.recordError(entry, `Preview content read failed: ${currentState.message}`);
+      await this.recordError(entry, `Preview content read failed: ${currentState.message}`, "read");
       return "failed";
     }
 
@@ -339,7 +341,7 @@ export class VaultPreviewModal extends Modal {
 
     const pathResolution = this.resolveCurrentPathCollision(file, entry, current);
     if (pathResolution.status === "skipped") {
-      await this.recordSkipped(entry, pathResolution.message);
+      await this.recordSkipped(entry, pathResolution.message, "collision");
       return "skipped";
     }
 
@@ -393,12 +395,13 @@ export class VaultPreviewModal extends Modal {
     });
   }
 
-  private async recordSkipped(entry: VaultPreviewEntry, message: string): Promise<void> {
+  private async recordSkipped(entry: VaultPreviewEntry, message: string, issueKind: WorkIssueKind = "stale"): Promise<void> {
     this.lastRow = { message };
     await this.recordDecision({
       timestamp: this.now(),
       path: entry.preview.current.path,
       outcome: "skipped",
+      issueKind,
       appliedRuleIds: entry.preview.result?.appliedRuleIds ?? entry.preview.preview.appliedRuleIds,
       involvedRuleIds: [],
       mutationKinds: entry.preview.preview.mutationKinds,
@@ -408,12 +411,13 @@ export class VaultPreviewModal extends Modal {
     });
   }
 
-  private async recordError(entry: VaultPreviewEntry, message: string): Promise<void> {
+  private async recordError(entry: VaultPreviewEntry, message: string, issueKind: WorkIssueKind = this.entryStarted ? "mutation" : "planning"): Promise<void> {
     this.lastRow = { message };
     await this.recordDecision({
       timestamp: this.now(),
       path: entry.preview.current.path,
       outcome: "error",
+      issueKind,
       appliedRuleIds: entry.preview.result?.appliedRuleIds ?? entry.preview.preview.appliedRuleIds,
       involvedRuleIds: [],
       mutationKinds: entry.preview.preview.mutationKinds,

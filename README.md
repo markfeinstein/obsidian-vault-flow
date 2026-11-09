@@ -160,6 +160,15 @@ Undo records are kept separately from diagnostics. Vault Flow retains up to 100 
 
 Runtime history, batch receipts, sweep state, and rule statistics are stored in Obsidian's device-local plugin storage rather than synced settings.
 
+## Failed-work inbox
+
+**Show failed-work inbox** groups unresolved recent work by metadata/read failures, planning problems, collisions, stale previews, active-note deferrals, and pending-write recovery. It shows at most 500 items with 50 rows per page, using recent device-local diagnostics and the recovery journal—not a second durable job queue.
+
+- **Replan and review** reads the current note using the original trigger contexts and opens a fresh apply preview. It never replays an old mutation or bypasses apply confirmation, pause, scope, or stale-plan guards. Legacy diagnostics without trigger information use manual rules.
+- **Inspect recovery** handles unresolved journal entries separately. Acknowledgment never repairs a note or automatically resumes writes.
+- A successful live evaluation does not hide an unresolved sweep-only failure.
+- **Open existing note** refuses a missing path instead of creating a replacement note.
+
 ## Bases
 
 The **Vault Flow plan** Bases view uses the Base's current filters, sorting, grouping, and result limit.
@@ -188,6 +197,7 @@ Select the rows you want, open the apply preview, and confirm the batch. Vault F
 - **Show undo history**
 - **Inspect pending-write recovery**
 - **Show apply batch receipts**
+- **Show failed-work inbox**
 - **Export diagnostics to Markdown**
 - **Export settings to clipboard**
 

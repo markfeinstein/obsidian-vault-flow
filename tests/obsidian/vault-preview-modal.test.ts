@@ -228,6 +228,21 @@ describe("VaultPreviewModal rendering", () => {
 });
 
 describe("VaultPreviewModal applySelected", () => {
+  it("stops a batch and routes to recovery after an uncertain mutation failure", async () => {
+    const file = makeFile("Inbox/note.md");
+    const decisions: ReconciliationDecision[] = [];
+    const onMutationFailed = vi.fn();
+    const app = makeApp(file, { frontmatter: { status: "todo" } }, async (_file, mutate) => { mutate({ status: "todo" }); throw new Error("Storage failure after the mutation boundary"); });
+    Object.assign(app.vault, { read: async () => "" });
+    const modal = new VaultPreviewModal(app, [], { collisionPolicy: () => "skip", onMutationStarted: () => {}, onMutationFailed,
+      recordDecision: async (decision) => { decisions.push(decision); } });
+    await (modal as unknown as VaultPreviewApplyHarness).applySelected([makeEntryForPath(file.path), makeEntryForPath("Inbox/second.md")]);
+    expect(decisions[0]?.message).toContain("Storage failure after the mutation boundary");
+    expect(onMutationFailed).toHaveBeenCalledOnce();
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]).toMatchObject({ outcome: "error", issueKind: "mutation" });
+  });
+
   it("skips stale preview rows without overwriting newer frontmatter", async () => {
     const file = makeFile("Inbox/note.md");
     const previewCurrent = makeState();
