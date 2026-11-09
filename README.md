@@ -228,6 +228,12 @@ Useful commands:
 
 `package.json` is the version source of truth. Release tags are numeric versions such as `0.1.0` and must match `manifest.json`. The release workflow checks the build and publishes `main.js`, `manifest.json`, and `styles.css`.
 
+## Bulk review and retained undo history
+
+Vault previews support path, status, and rule filters; folder/rule grouping; select-page/select-filtered controls bounded by the batch limit; and explicit deselection. Selection persists across pages and filters, with hidden selections counted before apply. The final confirmation summarizes the scope and duplicate proposed destinations. “Copy selected plan summary” exports paths, rule IDs, and property names, not note bodies or property values.
+
+Undo history now paginates and searches all retained transactions, rather than exposing only the latest 20. Individual and batch undo require confirmation and retain identity/frontmatter checks. Batch undo explicitly includes other pages and filtered-out entries from that batch; older entries without verified identities remain non-undoable. Retention limits still apply: this is not a substitute for backups.
+
 ## Rule fixtures and semantic save review
 
 The editor shows condition, action, execution-order, and fixture changes before saving. Repetition warnings and failed fixtures require explicit acknowledgment. Add up to 20 synthetic fixtures (200 KB total per rule) in the editor and run them without reading or writing vault notes. A disabled rule is enabled only for its fixture run; `runOn` is still honored. Fixtures default to a fixed clock (`now: 0`), the manual trigger, and 10 iterations. Use explicit `now`/timestamps for age tests. Expected frontmatter is a subset; `absentProperties` asserts deletion.

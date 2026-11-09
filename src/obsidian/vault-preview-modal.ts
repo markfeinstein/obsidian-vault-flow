@@ -10,6 +10,7 @@ import type { CollisionPolicy } from "./settings";
 import { MAX_BATCH_RECEIPT_ROWS, type BatchReceipt, type BatchRowReceipt } from "./batch-history";
 import { WriteSafetyError } from "./write-safety";
 import { bodyFingerprint } from "./preview-snapshot";
+import { exportPreviewSummary, filterPreviewEntries, previewGroup, previewReviewSummary, previewRuleIds, type PreviewFilter } from "./bulk-review";
 
 class ApplyCancelledError extends Error {}
 class ApplyStoppedError extends Error {}
@@ -40,6 +41,7 @@ export class VaultPreviewModal extends Modal {
   private readonly pending: readonly VaultPreviewEntry[];
   private readonly selected = new Set<VaultPreviewEntry>();
   private currentPage = 0;
+  private filter: PreviewFilter = { query: "", outcome: "", ruleId: "", groupBy: "none" };
   private applying = false;
   private batchStarted = false;
   private entryStarted = false;
@@ -74,7 +76,7 @@ export class VaultPreviewModal extends Modal {
     this.contentEl.empty();
   }
 
-  private render(): void {
+  private render(focusQueryAt?: number): void {
     this.contentEl.empty();
 
     if (this.pending.length === 0) {
@@ -82,7 +84,44 @@ export class VaultPreviewModal extends Modal {
       return;
     }
 
-    const pageCount = Math.ceil(this.pending.length / PREVIEW_PAGE_SIZE);
+    const controls = this.contentEl.createDiv({ cls: "vf-preview-controls" });
+    const search = controls.createEl("input", { type: "search", attr: { placeholder: "Filter source or destination path", "aria-label": "Filter preview paths" } });
+    search.value = this.filter.query;
+    search.disabled = this.applying;
+    search.addEventListener("input", () => { this.filter = { ...this.filter, query: search.value }; this.currentPage = 0; this.render(search.selectionStart ?? search.value.length); });
+    if (focusQueryAt !== undefined) { search.focus?.(); search.setSelectionRange?.(focusQueryAt, focusQueryAt); }
+    const addFilter = (label: string, values: readonly string[], selected: string, update: (value: string) => void): void => {
+      const select = controls.createEl("select", { attr: { "aria-label": label } });
+      for (const value of values) select.createEl("option", { text: value || label, attr: { value } });
+      select.value = selected; select.disabled = this.applying;
+      select.addEventListener("change", () => { update(select.value); this.currentPage = 0; this.render(); });
+    };
+    addFilter("All statuses", ["", ...new Set(this.pending.map((entry) => entry.preview.preview.outcome))], this.filter.outcome, (outcome) => { this.filter = { ...this.filter, outcome }; });
+    addFilter("All rules", ["", ...new Set(this.pending.flatMap(previewRuleIds))], this.filter.ruleId, (ruleId) => { this.filter = { ...this.filter, ruleId }; });
+    addFilter("Grouping", ["none", "folder", "rule"], this.filter.groupBy, (value) => { this.filter = { ...this.filter, groupBy: value === "folder" || value === "rule" ? value : "none" }; });
+    const visible = filterPreviewEntries(this.pending, this.filter);
+    const visibleSet = new Set(visible);
+    const pageCount = Math.max(1, Math.ceil(visible.length / PREVIEW_PAGE_SIZE));
+    this.currentPage = Math.min(this.currentPage, pageCount - 1);
+    const pageEntries = visible.slice(this.currentPage * PREVIEW_PAGE_SIZE, (this.currentPage + 1) * PREVIEW_PAGE_SIZE);
+    const selectionButton = (label: string, action: () => void): void => {
+      const button = controls.createEl("button", { text: label }); button.disabled = this.applying;
+      button.onclick = () => { action(); this.render(); };
+    };
+    const selectEntries = (entries: readonly VaultPreviewEntry[]): void => {
+      const limit = this.callbacks.maxBatchWrites?.() ?? 100;
+      for (const entry of entries) if (this.selected.size < limit && isApplyableEntry(entry)) this.selected.add(entry);
+    };
+    selectionButton("Select page", () => { selectEntries(pageEntries); });
+    selectionButton("Select filtered (batch limit)", () => { selectEntries(visible); });
+    selectionButton("Deselect filtered", () => { for (const entry of visible) this.selected.delete(entry); });
+    selectionButton("Clear selection", () => { this.selected.clear(); });
+    const copy = controls.createEl("button", { text: "Copy selected plan summary" });
+    copy.disabled = this.applying || this.selected.size === 0;
+    copy.onclick = async () => {
+      try { await navigator.clipboard.writeText(exportPreviewSummary(this.pending.filter((entry) => this.selected.has(entry)))); new Notice("Copied paths, rule IDs and property names; no bodies or property values."); }
+      catch { new Notice("Vault Flow could not copy the plan summary."); }
+    };
     const pagination = this.contentEl.createDiv({ cls: "vf-preview-pagination" });
     const previous = pagination.createEl("button", { text: "Previous" });
     previous.disabled = this.applying || this.currentPage === 0;
@@ -102,7 +141,9 @@ export class VaultPreviewModal extends Modal {
     const summary = footer.createSpan({ cls: "vf-preview-summary", attr: { "aria-live": "polite" } });
     const applyBtn = footer.createEl("button", { text: this.applying ? "Applying…" : "Apply selected", cls: "mod-cta" });
     const updateSelection = (): void => {
-      summary.setText(`${this.selected.size} selected of ${this.pending.length} pending changes (all pages)`);
+      const outside = [...this.selected].filter((entry) => !visibleSet.has(entry)).length;
+      summary.setText(`${this.selected.size} selected of ${this.pending.length} pending changes (all pages); ${visible.length} match filters${outside ? `; ${outside} selected outside filters` : ""}`);
+      copy.disabled = this.applying || this.selected.size === 0;
       applyBtn.disabled = this.applying || this.selected.size === 0;
     };
     updateSelection();
@@ -126,8 +167,11 @@ export class VaultPreviewModal extends Modal {
     }
 
     const tbody = table.createEl("tbody");
-    const start = this.currentPage * PREVIEW_PAGE_SIZE;
-    for (const entry of this.pending.slice(start, start + PREVIEW_PAGE_SIZE)) {
+    let lastGroup: string | null = null;
+    for (const entry of pageEntries) {
+      const group = previewGroup(entry, this.filter.groupBy);
+      if (this.filter.groupBy !== "none" && group !== lastGroup) tbody.createEl("tr").createEl("th", { text: group, attr: { colspan: "5", scope: "rowgroup" } });
+      lastGroup = group;
       const tr = tbody.createEl("tr");
 
       const tdSelect = tr.createEl("td", { cls: "vf-preview-cell" });
@@ -175,7 +219,7 @@ export class VaultPreviewModal extends Modal {
       this.render();
       let finished = false;
       try {
-        if (!(await confirmPreviewApply(this.app, selectedEntries.length))) return;
+        if (!(await confirmPreviewApply(this.app, selectedEntries))) return;
         await this.applySelected(selectedEntries);
         finished = true;
         this.close();
@@ -447,7 +491,8 @@ async function currentStateForPreviewApply(
   }
 }
 
-function confirmPreviewApply(app: App, count: number): Promise<boolean> {
+function confirmPreviewApply(app: App, entries: readonly VaultPreviewEntry[]): Promise<boolean> {
+  const count = entries.length;
   if (count === 0) {
     return Promise.resolve(false);
   }
@@ -455,7 +500,7 @@ function confirmPreviewApply(app: App, count: number): Promise<boolean> {
     let settled = false;
     const modal = new ConfirmationModal(app);
     modal.setTitle("Apply previewed changes");
-    modal.setContent(`Apply ${count} selected change${count === 1 ? "" : "s"}? This writes to the vault even when global dry-run mode is enabled.`);
+    modal.setContent(`${previewReviewSummary(entries)}\n\n${entries.slice(0, 10).map((entry) => `${entry.path} → ${entry.desiredPath ?? entry.path}`).join("\n")}${count > 10 ? `\n…and ${count - 10} more.` : ""}\n\nThis writes to the vault even when global dry-run mode is enabled. Each note is revalidated before writing.`);
     modal.addButton((button) => {
       button
         .setButtonText("Apply changes")
