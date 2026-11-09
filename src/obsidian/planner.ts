@@ -44,7 +44,7 @@ export async function planFileReconciliation(
 ): Promise<FileReconciliationPlan> {
   const cache = app.metadataCache.getFileCache(file);
   const runnable = runnableRules(settings.rules, triggerContext);
-  const needsBodyContent = runnable.some((rule) => predicateNeedsBodyContent(rule.when));
+  let needsBodyContent = runnable.some((rule) => predicateNeedsBodyContent(rule.when));
   const currentWithoutBody = noteStateFromObsidian(file, cache);
   const eligibility = evaluateFileEligibility(file, cache, settings);
 
@@ -65,6 +65,23 @@ export async function planFileReconciliation(
     };
   }
 
+  const evaluate = (current: NoteState, probe = false): ReconciliationResult => reconcileFileState({
+    file: current, rules: runnable, options: {
+      maxIterations: settings.maxIterations, now, triggerContext,
+      formatDate: (timestamp, format) => moment(timestamp).format(format),
+      ...(probe ? {} : diagnostics),
+      onMissingBodyContent: (): never => { throw BODY_REQUIRED; },
+    },
+  });
+  if (needsBodyContent) {
+    try {
+      const result = evaluate(currentWithoutBody, true);
+      needsBodyContent = false;
+      return { status: "ready", current: currentWithoutBody, needsBodyContent, result: diagnostics.onRuleEvaluated === undefined ? result : evaluate(currentWithoutBody) };
+    } catch (error) {
+      if (error !== BODY_REQUIRED) throw error;
+    }
+  }
   let bodyContent: string | undefined;
   if (needsBodyContent) {
     try {
@@ -85,29 +102,29 @@ export async function planFileReconciliation(
     status: "ready",
     current,
     needsBodyContent,
-    result: reconcileFileState({
-      file: current,
-      rules: runnable,
-      options: {
-        maxIterations: settings.maxIterations,
-        now,
-        triggerContext,
-        formatDate: (timestamp, format) => moment(timestamp).format(format),
-        ...(diagnostics.onRuleEvaluated === undefined ? {} : { onRuleEvaluated: diagnostics.onRuleEvaluated }),
-      },
-    }),
+    result: evaluate(current),
   };
 }
 
+const BODY_REQUIRED = new Error("Body input required for planning");
+const runnableCache = new WeakMap<readonly Rule[], Map<string, readonly Rule[]>>();
+
 export function runnableRules(rules: readonly Rule[], triggerContext: RuleRunOn | readonly RuleRunOn[]): readonly Rule[] {
   const contexts = Array.isArray(triggerContext) ? triggerContext : [triggerContext];
-  return rules.filter((rule) => {
+  const key = [...new Set(contexts)].sort().join(",");
+  const cached = runnableCache.get(rules)?.get(key);
+  if (cached !== undefined) return cached;
+  const selected = rules.filter((rule) => {
     if (!rule.enabled) {
       return false;
     }
     const runOn = rule.runOn ?? "always";
     return runOn === "always" || contexts.includes(runOn);
   });
+  const entries = runnableCache.get(rules) ?? new Map<string, readonly Rule[]>();
+  entries.set(key, selected);
+  runnableCache.set(rules, entries);
+  return selected;
 }
 
 export function markdownBodyContent(content: string): string {

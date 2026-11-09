@@ -1,6 +1,6 @@
 import { normalizePath } from "obsidian";
-import type { Frontmatter, FrontmatterValue, JsonScalar, NoteState } from "../engine";
-import { rawFrontmatterEqual } from "./adapter";
+import type { FrontmatterValue, NoteState } from "../engine";
+import { canonicalFrontmatter, canonicalValue as stringifyValue, rawFrontmatterEqual, sortValue } from "../engine/value-utils";
 
 export function sameNoteStateBaseline(planned: NoteState, current: NoteState): boolean {
   return planned.path === current.path
@@ -9,7 +9,7 @@ export function sameNoteStateBaseline(planned: NoteState, current: NoteState): b
     && planned.stat?.ctime === current.stat?.ctime
     && planned.stat?.mtime === current.stat?.mtime
     && planned.bodyH1 === current.bodyH1
-    && planned.bodyContent === current.bodyContent
+    && (planned.bodyFingerprint === undefined ? planned.bodyContent === current.bodyContent : planned.bodyFingerprint === current.bodyFingerprint)
     && arraysEqual(normalizeTags(planned.tags), normalizeTags(current.tags))
     && arraysEqual(frontmatterKeys(planned), frontmatterKeys(current))
     && canonicalFrontmatter(planned.frontmatter) === canonicalFrontmatter(current.frontmatter)
@@ -47,20 +47,9 @@ function frontmatterKeys(state: NoteState): readonly string[] {
   return [...new Set([...(state.frontmatterKeys ?? []), ...Object.keys(state.frontmatter)])].sort();
 }
 
-function canonicalFrontmatter(frontmatter: Frontmatter): string {
-  const sorted = Object.create(null) as Frontmatter;
-  for (const key of Object.keys(frontmatter).sort()) {
-    const value = frontmatter[key];
-    if (value !== undefined) {
-      sorted[key] = key === "tags" ? [...normalizeTags(frontmatterTagsFromValue(value))] : sortFrontmatterValue(value);
-    }
-  }
-  return JSON.stringify(sorted);
-}
-
 function canonicalValue(value: FrontmatterValue | undefined, tags: boolean): string {
   if (value === undefined) return "undefined";
-  return JSON.stringify(tags ? [...normalizeTags(frontmatterTagsFromValue(value))] : sortFrontmatterValue(value));
+  return stringifyValue(tags ? [...normalizeTags(frontmatterTagsFromValue(value))] : sortValue(value));
 }
 
 function frontmatterTagsFromValue(value: FrontmatterValue): readonly string[] {
@@ -85,20 +74,6 @@ function normalizeTags(tags: readonly string[]): readonly string[] {
   return [...valuesByKey.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([, value]) => value);
-}
-
-function sortFrontmatterValue(value: FrontmatterValue): FrontmatterValue {
-  if (Array.isArray(value)) {
-    return [...value];
-  }
-  if (value !== null && typeof value === "object") {
-    const sorted = Object.create(null) as Record<string, JsonScalar>;
-    for (const key of Object.keys(value).sort()) {
-      sorted[key] = value[key];
-    }
-    return sorted;
-  }
-  return value;
 }
 
 function arraysEqual(left: readonly string[], right: readonly string[]): boolean {

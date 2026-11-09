@@ -24,6 +24,7 @@ import { renderFrontmatterDiff } from "./frontmatter-diff";
 import { mapWithConcurrency } from "./concurrency";
 import { planReconciliationForFile, type DryRunPreviewPlan } from "./dry-run-preview";
 import { countFrontmatterChanges } from "./note-state";
+import { compactPreviewPlan } from "./preview-snapshot";
 import type { VaultFlowSettings } from "./settings";
 import { VaultPreviewModal, type VaultPreviewApplyCallbacks, type VaultPreviewEntry } from "./vault-preview-modal";
 
@@ -131,7 +132,7 @@ export class VaultFlowBasesView extends BasesView implements HoverParent {
       if (cached?.key === cacheKey) {
         return cached.plan;
       }
-      const plan = await planBasesEntry(
+      const plan = await compactPreviewPlan(await planBasesEntry(
         this.app,
         entry,
         settings,
@@ -140,7 +141,7 @@ export class VaultFlowBasesView extends BasesView implements HoverParent {
         destinationDisplayName,
         now,
         actionOptions,
-      );
+      ));
       if (generation === this.refreshGeneration && dataRevision === this.dataRevision) {
         // Metadata/content availability and destination collisions can recover
         // without changing this note's stats. Never make those failures sticky.

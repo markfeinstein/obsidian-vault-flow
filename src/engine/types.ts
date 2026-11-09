@@ -28,6 +28,8 @@ export interface NoteState {
   readonly bodyH1?: string;
   /** Full body content string, used by contentContains predicate. Loaded on demand. */
   readonly bodyContent?: string;
+  /** Compact reviewed previews retain a SHA-256 baseline rather than the note body. */
+  readonly bodyFingerprint?: string;
 }
 
 export type RuleId = string;
@@ -144,6 +146,8 @@ export interface ReconciliationOptions {
   readonly formatDate?: (timestamp: number, format: string) => string;
   /** Opt-in, read-only diagnostics. Normal reconciliation does not construct traces. */
   readonly onRuleEvaluated?: (trace: RuleEvaluationTrace) => void;
+  /** Planning probe: stop only if evaluation actually reaches an unavailable body input. */
+  readonly onMissingBodyContent?: () => never;
 }
 
 export interface ReconciliationInput {

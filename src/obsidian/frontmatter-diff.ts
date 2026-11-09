@@ -1,4 +1,5 @@
 import type { NoteState } from "../engine";
+import { sortValue } from "../engine/value-utils";
 
 export interface FrontmatterDiffEntry {
   readonly property: string;
@@ -21,10 +22,7 @@ export function frontmatterDiff(current: NoteState, desired: NoteState): readonl
 }
 
 function formatValue(value: unknown): string {
-  const text = JSON.stringify(value, (_key, item: unknown) => {
-    if (typeof item !== "object" || item === null || Array.isArray(item)) return item;
-    return Object.fromEntries(Object.entries(item).sort(([left], [right]) => left.localeCompare(right)));
-  }, 2) ?? "undefined";
+  const text = JSON.stringify(sortValue(value), null, 2) ?? "undefined";
   return text;
 }
 

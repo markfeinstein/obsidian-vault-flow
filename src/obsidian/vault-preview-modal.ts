@@ -9,6 +9,7 @@ import { renderFrontmatterDiff } from "./frontmatter-diff";
 import type { CollisionPolicy } from "./settings";
 import { MAX_BATCH_RECEIPT_ROWS, type BatchReceipt, type BatchRowReceipt } from "./batch-history";
 import { WriteSafetyError } from "./write-safety";
+import { bodyFingerprint } from "./preview-snapshot";
 
 class ApplyCancelledError extends Error {}
 class ApplyStoppedError extends Error {}
@@ -287,7 +288,7 @@ export class VaultPreviewModal extends Modal {
     this.assertCanStart();
     const transaction = await applyReconciliationResult(this.app, file, current, pathResolution.result, () => {
       this.assertCanStart();
-      const baseline = noteStateFromObsidian(file, this.app.metadataCache.getFileCache(file), { bodyContent: current.bodyContent });
+      const baseline = { ...noteStateFromObsidian(file, this.app.metadataCache.getFileCache(file), { bodyContent: current.bodyContent }), bodyFingerprint: current.bodyFingerprint };
       if (!sameNoteStateBaseline(current, baseline)) {
         throw new Error("The note changed during transaction preparation. Generate a new preview.");
       }
@@ -435,9 +436,11 @@ async function currentStateForPreviewApply(
 
   try {
     const completeContent = await app.vault.cachedRead(file);
+    const body = markdownBodyContent(completeContent);
+    const current = noteStateFromObsidian(file, app.metadataCache.getFileCache(file), { bodyContent: body });
     return {
       status: "ready",
-      current: noteStateFromObsidian(file, app.metadataCache.getFileCache(file), { bodyContent: markdownBodyContent(completeContent) }),
+      current: previewed.bodyFingerprint === undefined ? current : { ...current, bodyFingerprint: await bodyFingerprint(body) },
     };
   } catch (error) {
     return { status: "failed", message: formatError(error) };

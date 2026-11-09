@@ -12,6 +12,23 @@ export interface RuleRegex {
 // Shared by validation, matching, and capture extraction. Cache failures as well
 // as successes, and evict old patterns so editing/importing cannot grow it forever.
 const patterns = new Map<string, RuleRegex | Error>();
+const rulePools = new WeakMap<object, (pattern: string) => RuleRegex>();
+
+/** Active immutable rule sets retain their own patterns; unrelated sets remain collectible. */
+export function regexCompilerForRules(owner: object): (pattern: string) => RuleRegex {
+  const existing = rulePools.get(owner);
+  if (existing !== undefined) return existing;
+  const active = new Map<string, RuleRegex>();
+  const compile = (pattern: string): RuleRegex => {
+    const cached = active.get(pattern);
+    if (cached !== undefined) return cached;
+    const regex = compileRuleRegex(pattern);
+    active.set(pattern, regex);
+    return regex;
+  };
+  rulePools.set(owner, compile);
+  return compile;
+}
 
 export function compileRuleRegex(pattern: string): RuleRegex {
   const cached = patterns.get(pattern);

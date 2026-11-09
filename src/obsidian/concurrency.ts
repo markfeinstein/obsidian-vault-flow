@@ -1,4 +1,5 @@
-export interface ConcurrencyOptions {
+export interface ConcurrencyOptions<R = unknown> {
+  readonly retainResult?: (result: R) => boolean;
   readonly isCancelled?: () => boolean;
   readonly onProgress?: (completed: number, total: number) => void;
   readonly yieldEvery?: number;
@@ -8,7 +9,7 @@ export async function mapWithConcurrency<T, R>(
   values: readonly T[],
   concurrency: number,
   mapper: (value: T, index: number) => Promise<R>,
-  options: ConcurrencyOptions = {},
+  options: ConcurrencyOptions<R> = {},
 ): Promise<R[]> {
   const results = new Array<R | undefined>(values.length);
   let nextIndex = 0;
@@ -22,7 +23,8 @@ export async function mapWithConcurrency<T, R>(
       if (index >= values.length) return;
       const value = values[index];
       if (value === undefined) continue;
-      results[index] = await mapper(value, index);
+      const result = await mapper(value, index);
+      if (options.retainResult?.(result) !== false) results[index] = result;
       completed += 1;
       options.onProgress?.(completed, values.length);
       if (completed % safeYieldEvery === 0) {
