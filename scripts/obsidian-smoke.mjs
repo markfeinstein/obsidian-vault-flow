@@ -36,19 +36,27 @@ async function prepare(parent) {
   await mkdir(join(root, "Inbox"));
   for (const file of ["main.js", "manifest.json", "styles.css"]) await copyFile(join(repository, file), join(pluginDir, file));
   const bundleSha256 = createHash("sha256").update(await readFile(join(pluginDir, "main.js"))).digest("hex");
-  await json(join(root, markerName), { version: 1, id: randomUUID(), root, bundleSha256, createdAt: new Date().toISOString() });
+  await json(join(root, markerName), { version: 2, id: randomUUID(), root, bundleSha256, createdAt: new Date().toISOString() });
   await json(join(root, ".obsidian", "community-plugins.json"), ["vault-flow"]);
   await json(join(root, ".obsidian", "core-plugins.json"), ["file-explorer", "global-search", "properties", "page-preview", "bases"]);
   await json(join(root, ".obsidian", "app.json"), { alwaysUpdateLinks: true });
   await json(join(pluginDir, "data.json"), {
-    settingsVersion: 4, dryRun: true, sweepOnStartup: false, periodicSweepEnabled: false, monitoredFolders: ["Inbox"],
-    rules: [{ id: "smoke", name: "Synthetic smoke test", enabled: true, priority: 0, order: 0, runOn: "manual", stopOnMatch: true,
-      when: { type: "pathGlob", glob: "Inbox/**" },
+    settingsVersion: 4, dryRun: true, collisionPolicy: "rename-with-suffix", sweepOnStartup: false, periodicSweepEnabled: false, monitoredFolders: ["Inbox"],
+    rules: [
+      { id: "shared", name: "Synthetic shared destination", enabled: true, priority: 0, order: 1, runOn: "manual", stopOnMatch: true,
+        when: { type: "pathGlob", glob: "Inbox/Batch*.md" }, then: { moveTo: "Archive/Shared.md", moveToKind: "file", setProperties: { status: "done" } } },
+      { id: "stale", name: "Synthetic late collision", enabled: true, priority: 0, order: 2, runOn: "manual", stopOnMatch: true,
+        when: { type: "pathGlob", glob: "Inbox/Stale.md" }, then: { moveTo: "Archive/Contended.md", moveToKind: "file", setProperties: { status: "done" } } },
+      { id: "smoke", name: "Synthetic smoke test", enabled: true, priority: 0, order: 0, runOn: "manual", stopOnMatch: true,
+      when: { type: "pathGlob", glob: "Inbox/Example.md" },
       then: { moveTo: "Archive/Client.v2", moveToKind: "folder", setProperties: { status: "done", approved: false, count: 0 } },
       fixtures: [{ name: "Synthetic fixture", note: { path: "Inbox/Example.md", frontmatter: { status: "draft" } },
         expected: { path: "Archive/Client.v2/Example.md", frontmatter: { status: "done", approved: false, count: 0 }, status: "converged", changed: true } }] }],
   });
   await writeFile(join(root, "Inbox", "Example.md"), "---\nstatus: draft\ntags:\n  - smoke\n---\n# Synthetic example\n\nOnly generated test content belongs in this vault.\n", { flag: "wx" });
+  for (const [name, title] of [["BatchA", "Synthetic batch A"], ["BatchB", "Synthetic batch B"], ["Stale", "Synthetic stale preview"]]) {
+    await writeFile(join(root, "Inbox", `${name}.md`), `---\nstatus: draft\n---\n# ${title}\n`, { flag: "wx" });
+  }
   await writeFile(join(root, "Reference.md"), "# Synthetic reference\n\n[[Inbox/Example]]\n", { flag: "wx" });
   await json(join(root, "Smoke.base"), {
     filters: { and: ['file.ext == "md"', 'file.inFolder("Inbox")'] },
@@ -68,9 +76,9 @@ async function validateRoot(input) {
   const markerPath = join(root, markerName);
   if (!(await lstat(markerPath)).isFile() || (await lstat(markerPath)).isSymbolicLink()) throw new Error("Missing regular fixture marker.");
   const marker = JSON.parse(await readFile(markerPath, "utf8"));
-  if (marker.version !== 1 || marker.root !== root || typeof marker.id !== "string") throw new Error("Fixture marker does not match this exact root.");
+  if (marker.version !== 2 || marker.root !== root || typeof marker.id !== "string") throw new Error("Fixture marker does not match this exact root.");
   // Do not execute a plugin copied elsewhere or modified after preparation.
-  for (const relative of [".obsidian", ".obsidian/plugins", ".obsidian/plugins/vault-flow", ".obsidian/plugins/vault-flow/main.js", "Inbox", "Inbox/Example.md", "Reference.md", "Smoke.base"]) {
+  for (const relative of [".obsidian", ".obsidian/plugins", ".obsidian/plugins/vault-flow", ".obsidian/plugins/vault-flow/main.js", "Inbox", "Inbox/Example.md", "Inbox/BatchA.md", "Inbox/BatchB.md", "Inbox/Stale.md", "Reference.md", "Smoke.base"]) {
     if ((await realpath(join(root, relative))) !== join(root, relative)) throw new Error(`Symlink target rejected: ${relative}`);
   }
   const digest = createHash("sha256").update(await readFile(join(root, ".obsidian/plugins/vault-flow/main.js"))).digest("hex");
@@ -86,7 +94,7 @@ async function run(config) {
   const cli = config["--cli"];
   const selector = `vault=${config["--vault"]}`;
   const startedAt = Date.now();
-  const report = { root, status: "partial", checks: [], commands: [], version: "", error: null };
+  const report = { root, fixtureVersion: 2, platform: process.platform, architecture: process.arch, node: process.version, status: "partial", checks: [], commands: [], version: "", error: null };
   const reportPath = join(root, `.vault-flow-smoke-result-${Date.now()}.json`);
 
   function command(args) {
@@ -122,10 +130,12 @@ async function run(config) {
     return JSON.parse(output.slice(prefix + "VF_SMOKE:".length));
   }
 
-  async function waitFor(body, label) {
+  async function waitFor(body, label) { return waitForRead(() => evaluate(body), label); }
+
+  async function waitForRead(check, label) {
     const deadline = Math.min(startedAt + deadlineMs, Date.now() + 8_000);
     while (Date.now() < deadline) {
-      if (evaluate(body)) return;
+      if (check()) return;
       await delay(150);
     }
     throw new Error(`Timed out waiting for ${label}. No mutation is retried automatically.`);
@@ -140,20 +150,34 @@ async function run(config) {
     evaluate(`const button = Array.from(doc.querySelectorAll(".modal-container button")).find(el => el.textContent.trim() === ${JSON.stringify(text)}); if (!button || button.disabled) throw new Error("Expected enabled confirmation button missing"); button.click(); return true;`);
   }
 
-  function closeTopModal() {
-    evaluate("const close = doc.querySelector('.modal-container .modal-header-button, .modal-container .modal-close-button'); if (!close) throw new Error('Expected modal close control missing'); close.click(); return true;");
+  function filterPreview(query) {
+    evaluate(`const search = doc.querySelector('.modal-container input[aria-label="Filter preview paths"]'); if (!search) throw new Error("Preview filter missing"); search.value = ${JSON.stringify(query)}; search.dispatchEvent(new doc.defaultView.Event("input", {bubbles:true})); return true;`);
   }
+
+  function reviewedDestinations() {
+    return evaluate('return Array.from(doc.querySelectorAll(".modal-container .vf-preview-table tbody tr")).filter(row => row.querySelector("input[type=checkbox]")?.checked).map(row => { const cells = row.querySelectorAll(".vf-preview-path"); return {path: cells[0]?.textContent, destination: cells[1]?.textContent}; });');
+  }
+
+  function closeTopModal() {
+    evaluate("const close = Array.from(doc.querySelectorAll('.modal-container .modal-header-button, .modal-container .modal-close-button')).at(-1); if (!close) throw new Error('Expected modal close control missing'); close.click(); return true;");
+  }
+
+  // Consume a fixture before any CLI access. Even an unchanged note after a
+  // timeout is not evidence that replaying the attempted run would be safe.
+  try { await json(join(root, ".vault-flow-smoke-attempt.json"), { root, startedAt: new Date(startedAt).toISOString() }); }
+  catch { throw new Error("This fixture was already attempted or cannot retain an attempt marker. Prepare a fresh fixture; never retry an uncertain mutation."); }
 
   try {
     if (command(["vault", "info=path"]) !== root) throw new Error("CLI selector does not resolve to the exact generated fixture root.");
     report.version = command(["version"]);
-    for (const name of ["open", "command", "eval", "base:query", "dev:errors", "dev:screenshot"]) {
+    for (const name of ["open", "read", "create", "command", "eval", "base:query", "dev:errors", "dev:screenshot"]) {
       if (!command(["help", name])) throw new Error(`Empty help for ${name}`);
     }
     const enabled = command(["plugins:enabled", "filter=community"]);
     if (!enabled.includes("vault-flow")) throw new Error("Vault Flow is not enabled in the generated test vault. Inspect the test-vault trust/settings UI manually.");
     if (!command(["commands", "filter=vault-flow"]).includes("vault-flow:preview-vault")) throw new Error("Vault Flow commands were not registered.");
     report.checks.push("startup command registration");
+    await waitFor('return ["Inbox/Example.md", "Inbox/BatchA.md", "Inbox/BatchB.md", "Inbox/Stale.md"].every(path => { const file = app.vault.getFileByPath(path); return file && app.metadataCache.getFileCache(file) !== null; });', "all synthetic fixture metadata");
 
     const cliStatus = commandJson(["vault-flow:status"]);
     if (cliStatus.status !== "ok" || cliStatus.dryRun !== true || cliStatus.paused !== false) throw new Error("Vault Flow CLI status returned an unexpected safety state.");
@@ -204,6 +228,70 @@ async function run(config) {
     await waitFor('return Array.from(doc.querySelectorAll(".modal-container p")).some(el => el.textContent === "No pending writes.");', "empty recovery journal after committed apply/undo");
     closeTopModal();
     report.checks.push("completed apply and undo acknowledge device-local pending-write records");
+
+    command(["command", "id=vault-flow:show-work-inbox"]);
+    await waitFor('return Array.from(doc.querySelectorAll(".modal-container p")).some(el => el.textContent.includes("No unresolved recent work."));', "empty failed-work inbox");
+    closeTopModal();
+    report.checks.push("failed-work inbox entry point and resolved-work filtering");
+
+    command(["command", "id=vault-flow:preview-vault"]);
+    await waitFor('return !!doc.querySelector(".modal-container input[aria-label=\\"Filter preview paths\\"]");', "batch collision preview");
+    filterPreview("Inbox/Batch");
+    clickButton("Select filtered (batch limit)");
+    const reviewed = reviewedDestinations();
+    if (reviewed.length !== 2 || !reviewed.some(row => row.path === "Inbox/BatchA.md") || !reviewed.some(row => row.path === "Inbox/BatchB.md")
+      || reviewed.map(row => row.destination).sort().join("|") !== "Archive/Shared 1.md|Archive/Shared.md") throw new Error("Shared batch destinations were not reserved before confirmation.");
+    clickButton("Refresh destinations");
+    if (JSON.stringify(reviewedDestinations()) !== JSON.stringify(reviewed)) throw new Error("Unchanged destination refresh changed the reviewed batch reservation.");
+    clickButton("Apply selected");
+    await waitFor('return Array.from(doc.querySelectorAll(".modal-container button")).some(el => el.textContent.trim() === "Apply changes");', "reserved batch confirmation");
+    clickButton("Apply changes");
+    await waitFor(`return ${JSON.stringify(reviewed)}.every(row => { const file = app.vault.getFileByPath(row.destination); return file && !app.vault.getFileByPath(row.path) && app.metadataCache.getFileCache(file)?.frontmatter?.status === "done"; });`, "exact reviewed batch destinations");
+    for (const row of reviewed) {
+      const title = row.path === "Inbox/BatchA.md" ? "# Synthetic batch A" : "# Synthetic batch B";
+      if (!command(["read", `path=${row.destination}`]).includes(title)) throw new Error("A batch note did not retain its own body at its reviewed destination.");
+    }
+    report.checks.push("shared batch destinations are reserved, refreshed, confirmed, and applied exactly");
+
+    command(["command", "id=vault-flow:preview-vault"]);
+    await waitFor('return !!doc.querySelector(".modal-container input[aria-label=\\"Filter preview paths\\"]");', "late collision preview");
+    filterPreview("Inbox/Stale");
+    clickButton("Select filtered (batch limit)");
+    if (JSON.stringify(reviewedDestinations()) !== JSON.stringify([{ path: "Inbox/Stale.md", destination: "Archive/Contended.md" }])) throw new Error("Late-collision fixture did not review its original destination.");
+    // This deliberate race writes only a new, synthetic note in the verified
+    // fixture. Never repeat create/apply after a timeout or unknown outcome.
+    command(["create", "path=Archive/Contended.md", "content=# Synthetic late occupant"]);
+    clickButton("Apply selected");
+    await waitFor('return Array.from(doc.querySelectorAll(".modal-container button")).some(el => el.textContent.trim() === "Apply changes");', "late collision confirmation");
+    clickButton("Apply changes");
+    await waitForRead(() => commandJson(["vault-flow:diagnostics", "limit=20"]).decisions?.some(row => row.path === "Inbox/Stale.md" && row.outcome === "skipped" && row.issueKind === "collision"), "recorded late collision");
+    const preserved = evaluate('return !!app.vault.getFileByPath("Inbox/Stale.md") && !!app.vault.getFileByPath("Archive/Contended.md") && !app.vault.getFileByPath("Archive/Contended 1.md");');
+    if (!preserved || !command(["read", "path=Archive/Contended.md"]).includes("# Synthetic late occupant")) throw new Error("A stale reviewed destination was overwritten or silently renamed.");
+    command(["command", "id=vault-flow:show-work-inbox"]);
+    await waitFor('return Array.from(doc.querySelectorAll(".modal-container h4")).some(el => el.textContent === "collision: Inbox/Stale.md");', "actionable failed collision");
+    clickButton("Replan and review");
+    await waitFor('return Array.from(doc.querySelectorAll(".modal-container .vf-preview-path")).some(el => el.textContent === "Archive/Contended 1.md");', "fresh inbox replan");
+    if (evaluate('return !!app.vault.getFileByPath("Archive/Contended 1.md");')) throw new Error("Inbox replanning unexpectedly wrote a note.");
+    closeTopModal();
+    report.checks.push("late collision skips without renaming; inbox replans read-only for a new review");
+
+    command(["command", "id=vault-flow:show-settings-history"]);
+    await waitFor('return Array.from(doc.querySelectorAll(".modal-container button")).some(el => el.textContent.trim() === "Review restore");', "settings revision history");
+    clickButton("Review restore");
+    await waitFor('return Array.from(doc.querySelectorAll(".modal-container button")).some(el => el.textContent.trim() === "Restore settings; keep writes paused");', "settings restore review");
+    closeTopModal();
+    await waitFor('return !Array.from(doc.querySelectorAll(".modal-container button")).some(el => el.textContent.trim() === "Restore settings; keep writes paused");', "settings restore cancellation");
+    if (commandJson(["vault-flow:status"]).paused !== false) throw new Error("Canceling settings restore changed the pause state.");
+    clickButton("Review restore");
+    await waitFor('return Array.from(doc.querySelectorAll(".modal-container button")).some(el => el.textContent.trim() === "Restore settings; keep writes paused");', "confirmed settings restore review");
+    clickButton("Restore settings; keep writes paused");
+    await waitForRead(() => commandJson(["vault-flow:status"]).paused === true, "paused writes after settings restore");
+    await waitFor('return Array.from(doc.querySelectorAll(".modal-container button")).some(el => el.textContent.trim() === "Review restore" && !el.disabled);', "completed settings restore");
+    closeTopModal();
+    if (commandJson(["vault-flow:status"]).dryRun !== true) throw new Error("Settings restore lost the fixture's dry-run default.");
+    command(["command", "id=vault-flow:toggle-automation-pause"]);
+    if (commandJson(["vault-flow:status"]).paused !== false) throw new Error("Settings restore did not permit explicit safe resume.");
+    report.checks.push("settings revision review, cancellation, confirmed restore, and explicit resume");
 
     const query = command(["base:query", "path=Smoke.base", "view=Native table", "format=paths"]);
     if (!query.includes("Inbox/Example.md")) throw new Error("Native Base query did not return the expected fixture note.");
