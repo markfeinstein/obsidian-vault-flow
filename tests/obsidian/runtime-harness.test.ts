@@ -24,7 +24,7 @@ describe("isolated runtime harness (mock CLI, not Obsidian runtime verification)
   it("prepares only generated notes, an exact marker, and a dry-run plugin configuration", () => {
     const fixture = prepare();
     expect(JSON.parse(readFileSync(join(fixture.root, ".vault-flow-smoke.json"), "utf8"))).toMatchObject({ root: fixture.root, bundleSha256: fixture.bundleSha256 });
-    expect(JSON.parse(readFileSync(join(fixture.root, ".obsidian/plugins/vault-flow/data.json"), "utf8"))).toMatchObject({ dryRun: true, sweepOnStartup: false, settingsVersion: 3 });
+    expect(JSON.parse(readFileSync(join(fixture.root, ".obsidian/plugins/vault-flow/data.json"), "utf8"))).toMatchObject({ dryRun: true, sweepOnStartup: false, settingsVersion: 4 });
     expect(readFileSync(join(fixture.root, "Inbox/Example.md"), "utf8")).toContain("status: draft");
   });
 
@@ -53,11 +53,11 @@ appendFileSync(process.env.SMOKE_LOG, JSON.stringify(args) + "\\n");
 const command = args[1];
 let stage = existsSync(process.env.SMOKE_STATE) ? JSON.parse(readFileSync(process.env.SMOKE_STATE, "utf8")) : 0;
 const save = () => writeFileSync(process.env.SMOKE_STATE, JSON.stringify(stage));
-const button = (text) => ({ textContent: text, disabled: false, click() { if (text === "Apply changes") { stage = 2; save(); } } });
+const button = (text) => ({ textContent: text, disabled: false, click() { if (text === "Apply changes") stage = 2; if (text === "Select filtered (batch limit)") stage = 1; if (text === "Undo transaction(s)") stage = 0; save(); } });
 const doc = {
  defaultView: { Event: class {}, dispatchEvent() {} }, body: { dispatchEvent() {} }, dispatchEvent() {},
- querySelectorAll(selector) { return selector === ".vertical-tab-nav-item" ? [button("Vault Flow")] : [button("Apply selected"), button("Apply changes")]; },
- querySelector(selector) { return { textContent: "Automation Rules", open: false, click() { if (selector.includes("vf-undo-button")) { stage = 0; save(); } }, dispatchEvent() {} }; }
+ querySelectorAll(selector) { if (selector === ".vertical-tab-nav-item") return [button("Vault Flow")]; if (selector === ".modal-container p") return [button("No pending writes.")]; return [button("Select filtered (batch limit)"), button("Apply selected"), button("Apply changes"), button("Undo transaction(s)")]; },
+ querySelector() { return { textContent: "Automation Rules", open: false, checked: stage === 1 || stage === 2, click() {}, dispatchEvent() {} }; }
 };
 const app = {
  vault: { adapter: { getBasePath: () => root }, getFileByPath: path => stage === 2 ? (path.startsWith("Archive/") ? {path} : null) : (path === "Inbox/Example.md" ? {path} : null) },
@@ -71,6 +71,8 @@ else if (command === "plugins:enabled") console.log("vault-flow");
 else if (command === "commands") console.log("vault-flow:preview-vault");
 else if (command === "vault-flow:status") console.log(JSON.stringify({status:"ok", dryRun:true, paused:false}));
 else if (command === "vault-flow:plan") console.log(JSON.stringify({status:"ok", outcome:"changed", desiredPath:"Archive/Client.v2/Example.md", propertyChanges:["status","approved","count"]}));
+else if (command === "vault-flow:plan-many") { const value = args.find(arg => arg.startsWith("paths=")).slice(6); const paths = value.startsWith("[") ? JSON.parse(value) : value.split("\\n"); console.log(JSON.stringify({status:"ok", count:paths.length, plans:paths.map(path => ({path, outcome:path === "Inbox/Example.md" ? "changed" : "excluded"}))})); }
+else if (command === "vault-flow:test-rule") console.log(JSON.stringify({status:"ok", count:1, results:[{passed:true}]}));
 else if (command === "vault-flow:diagnostics") console.log(JSON.stringify({status:"ok", decisions:[]}));
 else if (command === "base:query") console.log("Inbox/Example.md");
 else if (command === "eval") { const code = args.find(arg => arg.startsWith("code=")).slice(5); console.log(JSON.stringify(vm.runInNewContext(code, {app, activeDocument:doc}))); }
@@ -84,7 +86,9 @@ else if (command === "dev:errors") console.log("No errors");
     const receipt = JSON.parse(result.stdout) as { status: string; reportPath: string; checks: string[] };
     expect(receipt.status).toBe("passed");
     expect(receipt.checks).toContain("native settings entry point and declarative page rendering");
-    expect(receipt.checks).toContain("read-only CLI status, diagnostics, and bounded plan");
+    expect(receipt.checks).toContain("read-only CLI status, diagnostics, asynchronous bounded planning, and synthetic fixtures");
+    expect(receipt.checks).toContain("confirmed undo restores original path and properties");
+    expect(receipt.checks).toContain("completed apply and undo acknowledge device-local pending-write records");
     const calls = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[]);
     expect(calls.every((args) => args[0] === "vault=smoke")).toBe(true);
     expect(calls.filter((args) => args[1] === "eval").every((args) => args[2]?.includes("getBasePath() !=="))).toBe(true);

@@ -186,6 +186,7 @@ Select the rows you want, open the apply preview, and confirm the batch. Vault F
 - **Find duplicate source URLs**
 - **Preview vault changes**
 - **Show undo history**
+- **Inspect pending-write recovery**
 - **Show apply batch receipts**
 - **Export diagnostics to Markdown**
 - **Export settings to clipboard**
@@ -206,6 +207,10 @@ obsidian vault="VAULT" vault-flow:test-rule rule="archive-reviewed"
 
 The plan output contains paths, rule IDs, mutation kinds, and changed property names. It omits note bodies and property values. Diagnostics can still contain private paths and rule identifiers.
 
+`plan-many` accepts a JSON path array or a newline-separated exact path list (for example, the output of the official `base:query path=… view=… format=paths` command). It deduplicates paths, defaults to 100 notes, caps requests at 200 notes / 64 KiB, runs at concurrency 4, and limits output to 1 MiB. Planning stops launching notes after 10 seconds or a settings change. An in-flight Obsidian read or synchronous engine evaluation cannot be forcibly aborted. Results never include body text or property values; property-name lists are bounded and mark truncation. There is deliberately no CLI apply command. The official CLI connects to a running Obsidian instance; it is not a headless, in-process Bases query API.
+
+`test-rule` runs one configured rule’s synthetic fixtures with the same fixed defaults as the editor and does not read vault notes.
+
 ## Development
 
 ```sh
@@ -220,21 +225,18 @@ Useful commands:
 - `npm run typecheck`: run TypeScript without emitting files
 - `npm test`: run the Vitest suite
 - `npm run bundle`: rebuild the production `main.js`
+- `npm run bench:regex`: compare individual and opt-in batched body regex matching
 - `npm run verify:mobile-bundle`: reject accidental Node.js or Electron runtime dependencies
 - `npm run verify:versions`: check version metadata
 - `npm run sync:version`: update `manifest.json` and `versions.json` from `package.json`
 - `npm run test:obsidian:prepare`: create an isolated synthetic test vault
 - `npm run test:obsidian -- --root … --vault … --cli … --allow-runtime`: run the opt-in desktop smoke driver against that exact generated vault
 
-`main.js` is generated but committed because it is a release asset.
+`main.js` is generated but committed because it is a release asset. See [validation and release gates](docs/validation.md) for the synthetic smoke flow, API/toolchain decisions, and unverified real-application scenarios.
 
 ## Releases
 
 `package.json` is the version source of truth. Release tags are numeric versions such as `0.1.0` and must match `manifest.json`. The release workflow checks the build and publishes `main.js`, `manifest.json`, and `styles.css`.
-
-`plan-many` accepts a JSON path array or a newline-separated exact path list (for example, the output of the official `base:query path=… view=… format=paths` command). It deduplicates paths, defaults to 100 notes, caps requests at 200 notes / 64 KiB, runs at concurrency 4, and limits output to 1 MiB. Planning stops launching notes after 10 seconds or a settings change. An in-flight Obsidian read or synchronous engine evaluation cannot be forcibly aborted. Results never include body text or property values; property-name lists are bounded and mark truncation. There is deliberately no CLI apply command. The official CLI connects to a running Obsidian instance; it is not a headless, in-process Bases query API.
-
-`test-rule` runs one configured rule’s synthetic fixtures with the same fixed defaults as the editor and does not read vault notes.
 
 ## Interrupted-write recovery
 
@@ -274,7 +276,7 @@ Planning first evaluates metadata and earlier rule actions in memory, loading a 
 - Bases does not expose a supported headless query API, so live and sweep automation use Vault Flow's own planner.
 - Globs use the `*`, `**`, and `?` dialect and are limited to 1,024 characters.
 - Regexes use RE2-compatible syntax rather than the full JavaScript RegExp syntax.
-- The synthetic Obsidian 1.15.1 desktop smoke flow has been exercised. Minimum-version desktop, physical mobile devices, Sync, external-file views, pop-out windows, accessibility, and very large vaults still need real-application testing.
+- Automated checks are source/headless verification, not runtime confirmation. Minimum/current desktop, physical mobile devices, Sync, external-file views, pop-out windows, accessibility, crash/storage recovery, and very large vaults require the [application validation matrix](docs/validation.md).
 
 ## License
 

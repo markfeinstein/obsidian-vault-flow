@@ -41,10 +41,12 @@ async function prepare(parent) {
   await json(join(root, ".obsidian", "core-plugins.json"), ["file-explorer", "global-search", "properties", "page-preview", "bases"]);
   await json(join(root, ".obsidian", "app.json"), { alwaysUpdateLinks: true });
   await json(join(pluginDir, "data.json"), {
-    settingsVersion: 3, dryRun: true, sweepOnStartup: false, periodicSweepEnabled: false, monitoredFolders: ["Inbox"],
+    settingsVersion: 4, dryRun: true, sweepOnStartup: false, periodicSweepEnabled: false, monitoredFolders: ["Inbox"],
     rules: [{ id: "smoke", name: "Synthetic smoke test", enabled: true, priority: 0, order: 0, runOn: "manual", stopOnMatch: true,
       when: { type: "pathGlob", glob: "Inbox/**" },
-      then: { moveTo: "Archive/Client.v2", moveToKind: "folder", setProperties: { status: "done", approved: false, count: 0 } } }],
+      then: { moveTo: "Archive/Client.v2", moveToKind: "folder", setProperties: { status: "done", approved: false, count: 0 } },
+      fixtures: [{ name: "Synthetic fixture", note: { path: "Inbox/Example.md", frontmatter: { status: "draft" } },
+        expected: { path: "Archive/Client.v2/Example.md", frontmatter: { status: "done", approved: false, count: 0 }, status: "converged", changed: true } }] }],
   });
   await writeFile(join(root, "Inbox", "Example.md"), "---\nstatus: draft\ntags:\n  - smoke\n---\n# Synthetic example\n\nOnly generated test content belongs in this vault.\n", { flag: "wx" });
   await writeFile(join(root, "Reference.md"), "# Synthetic reference\n\n[[Inbox/Example]]\n", { flag: "wx" });
@@ -163,7 +165,11 @@ async function run(config) {
     }
     const cliDiagnostics = commandJson(["vault-flow:diagnostics", "limit=5"]);
     if (cliDiagnostics.status !== "ok" || !Array.isArray(cliDiagnostics.decisions)) throw new Error("Vault Flow CLI diagnostics returned invalid JSON.");
-    report.checks.push("read-only CLI status, diagnostics, and bounded plan");
+    const cliMany = commandJson(["vault-flow:plan-many", 'paths=["Inbox/Example.md","Reference.md"]', "limit=2"]);
+    if (cliMany.status !== "ok" || cliMany.count !== 2 || cliMany.plans[0]?.outcome !== "changed" || cliMany.plans[1]?.outcome !== "excluded") throw new Error("Bounded asynchronous multi-note CLI planning failed.");
+    const fixtureResults = commandJson(["vault-flow:test-rule", "rule=smoke"]);
+    if (fixtureResults.status !== "ok" || fixtureResults.count !== 1 || fixtureResults.results[0]?.passed !== true) throw new Error("Synthetic rule fixture failed.");
+    report.checks.push("read-only CLI status, diagnostics, asynchronous bounded planning, and synthetic fixtures");
 
     command(["open", "path=Inbox/Example.md"]);
     focusFixtureWindow();
@@ -176,7 +182,9 @@ async function run(config) {
 
     command(["command", "id=vault-flow:preview-vault"]);
     await waitFor('return !!doc.querySelector(".modal-container input[aria-label=\\"Apply planned change for Inbox/Example.md\\"]");', "vault preview");
-    evaluate('const box = doc.querySelector(".modal-container input[aria-label=\\"Apply planned change for Inbox/Example.md\\"]"); box.checked = true; box.dispatchEvent(new doc.defaultView.Event("change", {bubbles:true})); return true;');
+    evaluate('const search = doc.querySelector(".modal-container input[aria-label=\\"Filter preview paths\\"]"); search.value = "Inbox/Example"; search.dispatchEvent(new doc.defaultView.Event("input", {bubbles:true})); const group = doc.querySelector(".modal-container select[aria-label=\\"Grouping\\"]"); group.value = "folder"; group.dispatchEvent(new doc.defaultView.Event("change", {bubbles:true})); return true;');
+    clickButton("Select filtered (batch limit)");
+    await waitFor('return doc.querySelector(".modal-container input[aria-label=\\"Apply planned change for Inbox/Example.md\\"]")?.checked === true;', "filtered, grouped preview selection");
     clickButton("Apply selected");
     await waitFor('return Array.from(doc.querySelectorAll(".modal-container button")).some(el => el.textContent.trim() === "Apply changes");', "apply confirmation");
     clickButton("Apply changes");
@@ -187,12 +195,20 @@ async function run(config) {
     command(["command", "id=vault-flow:show-undo-history"]);
     await waitFor('return !!doc.querySelector(".modal-container .vf-undo-button");', "undo history");
     evaluate('doc.querySelector(".modal-container .vf-undo-button").click(); return true;');
+    await waitFor('return Array.from(doc.querySelectorAll(".modal-container button")).some(el => el.textContent.trim() === "Undo transaction(s)");', "undo confirmation");
+    clickButton("Undo transaction(s)");
     await waitFor('const file = app.vault.getFileByPath("Inbox/Example.md"); const fm = file && app.metadataCache.getFileCache(file)?.frontmatter; return !!fm && fm.status === "draft" && !("approved" in fm) && !app.vault.getFileByPath("Archive/Client.v2/Example.md");', "transaction undo");
     closeTopModal();
-    report.checks.push("undo restores original path and properties");
+    report.checks.push("confirmed undo restores original path and properties");
+    command(["command", "id=vault-flow:inspect-write-recovery"]);
+    await waitFor('return Array.from(doc.querySelectorAll(".modal-container p")).some(el => el.textContent === "No pending writes.");', "empty recovery journal after committed apply/undo");
+    closeTopModal();
+    report.checks.push("completed apply and undo acknowledge device-local pending-write records");
 
     const query = command(["base:query", "path=Smoke.base", "view=Native table", "format=paths"]);
     if (!query.includes("Inbox/Example.md")) throw new Error("Native Base query did not return the expected fixture note.");
+    const queriedPlans = commandJson(["vault-flow:plan-many", `paths=${query}`]);
+    if (queriedPlans.status !== "ok" || !queriedPlans.plans.some(plan => plan.path === "Inbox/Example.md" && plan.outcome === "changed")) throw new Error("Native Base paths could not feed read-only multi-note planning.");
     command(["open", "path=Smoke.base"]);
     await waitFor('return !!doc.querySelector(".vf-bases-view .vf-bases-table");', "real custom Bases view");
     command(["dev:screenshot", `path=${join(root, ".vault-flow-smoke-screenshot.png")}`]);
