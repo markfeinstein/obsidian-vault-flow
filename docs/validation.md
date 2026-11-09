@@ -12,7 +12,7 @@ Regression coverage includes:
 - Retained active regex patterns, opt-in lookbehind, RE2Set equivalence/fallback, and lazy capture upgrades.
 - Compact preview fingerprints rejecting edited bodies even if file statistics stay unchanged.
 - Filtered/scoped bulk selection and all retained undo pages.
-- Write-ahead ordering, quota/corruption/size failures, stale journal instances, restart pause, and identity-guarded history recovery.
+- Write-ahead ordering, quota/corruption/size failures, stale journal instances, restart pause, identity-guarded history recovery, and exact-file recovery inspection without implicit note creation.
 - Bounded CLI inputs, asynchronous results, cancellation/deadline behavior, privacy of summaries, and fixture checks.
 - Successful per-note sweep windows, threshold crossing after safe failures, and no success bookkeeping after uncertain mutations.
 - Iterative depth/node/ruleset budgets across imports, settings load/reload, and direct engine calls, with original saved settings preserved.
@@ -41,13 +41,15 @@ The driver validates the vault path and copied bundle hash, has a 90-second over
 
 It exercises registered asynchronous CLI handlers, synthetic rule fixtures, active-note diff expansion, filtered/grouped bulk selection, explicit apply and undo confirmations, public rename/link behavior, typed property writes, acknowledgment of completed pending-write records, native Base paths feeding bounded planning, custom Bases rendering, native settings navigation, and captured application errors.
 
-The follow-up flow also verifies two notes sharing a destination receive distinct names **before** confirmation and arrive at those exact reviewed paths with their own bodies. It deliberately creates one new synthetic destination occupant after review, verifies apply skips instead of overwriting or silently renaming, and opens a fresh read-only preview through the failed-work inbox. Settings-history review is canceled once and then explicitly confirmed; the smoke verifies the unchanged baseline retains dry-run and stays paused until explicit resume. Changing configuration values and restoring them is covered headlessly; the real-host matrix below still requires a changed-value restore test.
+The follow-up flow also verifies two notes sharing a destination receive distinct names **before** confirmation and arrive at those exact reviewed paths with their own bodies. It deliberately creates one new synthetic destination occupant after review, verifies apply skips instead of overwriting or silently renaming, and opens a fresh read-only preview through the failed-work inbox. Settings-history review is canceled once and then explicitly confirmed; the smoke verifies the unchanged baseline retains dry-run and stays paused until explicit resume. A separate native-window test verified an actual 500 → 750 → 500 timing change/restore on desktop 1.15.0; broader configuration/conflict coverage in the matrix remains required.
 
 The mock-CLI harness tests command sequencing and guards only. Its successful report is not evidence that any of these flows work in an actual Obsidian host.
 
 ## Required application matrix
 
-The changes in this review-remediation series have **not** been run in a real Obsidian instance. Record each scenario's version/platform, exact fixture, result, and retained report before claiming runtime validation.
+Selected flows have now been exercised in isolated **Obsidian 1.15.0 on macOS arm64**, including apply/undo, reviewed collisions, settings restore/external reload, journal failure, and interrupted-write restart. See the [dated desktop evidence and recovery inspection fix](desktop-validation-2026-11-09.md) for artifact identities, actual outcomes, and retained reports.
+
+The original smoke report remains **partial** at its native-settings window assumption; that page was verified separately, not relabeled as a passing end-to-end smoke. The matrix below is still required: one desktop version and controlled fault injection do not establish minimum/current desktop, mobile, Sync, performance, or comprehensive recovery support. Record each scenario's version/platform, exact fixture, result, and retained report before extending runtime claims.
 
 | Gate | Smallest useful next check |
 | --- | --- |

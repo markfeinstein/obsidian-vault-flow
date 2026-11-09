@@ -296,7 +296,7 @@ Planning first evaluates metadata and earlier rule actions in memory, loading a 
 - Rules are limited to 1,000 per settings snapshot, 64 levels of input nesting, 8,192 input values/containers per rule, and 65,536 across the ruleset (including fixtures and unknown fields). Oversized imports are rejected; oversized saved settings disable automation without overwriting the file.
 - Globs use the `*`, `**`, and `?` dialect and are limited to 1,024 characters.
 - Regexes use RE2-compatible syntax rather than the full JavaScript RegExp syntax.
-- Automated checks are source/headless verification, not runtime confirmation. Minimum/current desktop, physical mobile devices, Sync, external-file views, pop-out windows, accessibility, crash/storage recovery, and very large vaults require the [application validation matrix](docs/validation.md).
+- Automated checks are source/headless verification, not runtime confirmation. [Selected workflows were tested in isolated desktop Obsidian 1.15.0](docs/desktop-validation-2026-11-09.md), including controlled write interruption and restart. Minimum/current desktop, physical mobile devices, Sync, external-file views, broad pop-out/accessibility coverage, comprehensive crash/storage recovery, and very large vaults still require the [application validation matrix](docs/validation.md).
 
 ## License
 
