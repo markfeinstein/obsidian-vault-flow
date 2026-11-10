@@ -137,9 +137,11 @@ Adding a rule leaves existing execution priorities unchanged. If settings sync w
 
 ### Regular expressions
 
-User patterns run through the bundled RE2JS engine rather than JavaScript's backtracking regular expressions. Patterns are case-insensitive, limited to 512 characters and 10,000 compiled instructions, and cached in a bounded pool.
+User patterns run through bundled RE2JS rather than JavaScript's backtracking regular expressions. Patterns are case-insensitive and limited to 512 characters / 10,000 compiled instructions. Active immutable rule sets retain compiled patterns up to 1,024 patterns / 100,000 instructions per flag mode; larger sets fall back to the 64-entry cross-edit cache without changing matching semantics.
 
-Lookarounds and backreferences are not supported. Existing unsupported patterns disable automation without overwriting the saved settings.
+Strict RE2 syntax remains the default: lookarounds and backreferences are rejected. A rule may explicitly opt in to **Allow captureless regex lookbehind** (`regexLookbehind: true`), enabling positive/negative lookbehind with no captures inside the lookbehind. Captures outside it still work in templates. Lookaheads and backreferences remain unsupported. Lookbehind can disable faster matching paths, so use it only when necessary. Unsupported saved patterns still disable automation without overwriting settings.
+
+**Batch body regex matching** (`useRegexSet: true`) is a separate experimental opt-in, off by default. It uses RE2Set only for immutable body-regex inputs, never precomputed paths or properties. Sets are capped at 128 patterns / 20,000 combined instructions with a 4 MiB DFA budget per flag group, and fall back to individual matching on limits or errors. Captures and traces remain equivalent. Run `npm run bench:regex` for a synthetic headless comparison and benchmark representative vault rules before enabling; it is not Obsidian/mobile runtime confirmation.
 
 ## Write safety
 

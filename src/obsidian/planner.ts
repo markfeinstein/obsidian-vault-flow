@@ -5,6 +5,7 @@ import { evaluateFileEligibility, type FileEligibility, type FileEligibilitySett
 
 export interface FilePlanningSettings extends FileEligibilitySettings {
   readonly maxIterations: number;
+  readonly useRegexSet?: boolean;
   readonly rules: readonly Rule[];
 }
 
@@ -67,7 +68,7 @@ export async function planFileReconciliation(
 
   const evaluate = (current: NoteState, probe = false): ReconciliationResult => reconcileFileState({
     file: current, rules: runnable, options: {
-      maxIterations: settings.maxIterations, now, triggerContext,
+      maxIterations: settings.maxIterations, useRegexSet: settings.useRegexSet, now, triggerContext,
       formatDate: (timestamp, format) => moment(timestamp).format(format),
       ...(probe ? {} : diagnostics),
       onMissingBodyContent: (): never => { throw BODY_REQUIRED; },

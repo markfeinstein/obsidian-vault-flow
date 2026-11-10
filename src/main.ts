@@ -135,6 +135,7 @@ export default class VaultFlowPlugin extends Plugin {
       () => ({
         debounceMs: this.settings.debounceMs,
         maxIterations: this.settings.maxIterations,
+        useRegexSet: this.settings.useRegexSet,
         dryRun: this.settings.dryRun,
         collisionPolicy: this.settings.collisionPolicy,
         rules: this.settings.rules,
@@ -1367,6 +1368,7 @@ function settingsDataForSave(settings: VaultFlowSettings): PersistedVaultFlowSet
     rules: settings.rules,
     debounceMs: settings.debounceMs,
     maxIterations: settings.maxIterations,
+    useRegexSet: settings.useRegexSet,
     maxWritesPerMinute: settings.maxWritesPerMinute,
     maxBatchWrites: settings.maxBatchWrites,
     dryRun: settings.dryRun,

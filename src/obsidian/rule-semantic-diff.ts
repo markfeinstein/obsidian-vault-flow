@@ -12,7 +12,7 @@ export function semanticRuleChanges(before: Rule | null, after: Rule): readonly 
   return sections.filter(([, left, right]) => canonicalValue(left) !== canonicalValue(right)).map(([section, left, right]) => ({ section, before: left, after: right }));
 }
 function execution(rule: Rule): unknown {
-  return { enabled: rule.enabled, priority: rule.priority, order: rule.order, stopOnMatch: rule.stopOnMatch ?? false, dryRun: rule.dryRun ?? false, runOn: rule.runOn ?? "always" };
+  return { enabled: rule.enabled, priority: rule.priority, order: rule.order, stopOnMatch: rule.stopOnMatch ?? false, dryRun: rule.dryRun ?? false, runOn: rule.runOn ?? "always", regexLookbehind: rule.regexLookbehind ?? false };
 }
 export function formatSemanticChanges(changes: readonly RuleSemanticChange[]): string {
   return changes.map((change) => `${change.section.toUpperCase()}\nBefore: ${JSON.stringify(change.before) ?? "(new rule)"}\nAfter: ${JSON.stringify(change.after)}`).join("\n\n");

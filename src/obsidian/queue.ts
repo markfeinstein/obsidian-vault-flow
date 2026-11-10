@@ -10,6 +10,7 @@ import type { CollisionPolicy } from "./settings";
 export interface ReconciliationQueueOptions {
   readonly debounceMs: number;
   readonly maxIterations: number;
+  readonly useRegexSet?: boolean;
   readonly dryRun: boolean;
   readonly collisionPolicy: CollisionPolicy;
   readonly rules: FilePlanningSettings["rules"];

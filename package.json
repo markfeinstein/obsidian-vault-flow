@@ -16,6 +16,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
+    "bench:regex": "node scripts/benchmark-regex.mjs",
     "test:obsidian:prepare": "node scripts/obsidian-smoke.mjs --prepare",
     "test:obsidian": "node scripts/obsidian-smoke.mjs --run",
     "verify:versions": "node scripts/verify-versions.mjs",

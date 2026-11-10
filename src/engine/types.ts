@@ -45,6 +45,8 @@ export interface Rule {
   readonly priority: number;
   readonly order: number;
   readonly fixtures?: readonly RuleFixture[];
+  /** Explicit opt-in to RE2JS captureless lookbehind for this rule only. */
+  readonly regexLookbehind?: boolean;
   readonly when: RulePredicate;
   readonly then: RuleActionSet;
   /** When true, stop evaluating further rules once this rule fires. Default: false. */
@@ -151,6 +153,8 @@ export interface ReconciliationOptions {
   readonly onRuleEvaluated?: (trace: RuleEvaluationTrace) => void;
   /** Planning probe: stop only if evaluation actually reaches an unavailable body input. */
   readonly onMissingBodyContent?: () => never;
+  /** Opt-in multi-pattern matching for immutable note bodies only. */
+  readonly useRegexSet?: boolean;
 }
 
 export interface ReconciliationInput {

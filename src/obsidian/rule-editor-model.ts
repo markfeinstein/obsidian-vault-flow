@@ -82,6 +82,7 @@ export type VisualConditionNode =
   | { readonly kind: "group"; readonly group: VisualConditionGroup };
 
 export interface VisualRuleDraft {
+  readonly regexLookbehind?: boolean;
   readonly fixtures?: readonly RuleFixture[];
   readonly name: string;
   readonly enabled: boolean;
@@ -420,6 +421,7 @@ export function draftFromRule(rule: Rule): VisualRuleDraft | null {
     conditionNodes: nodesResult,
     stopOnMatch: rule.stopOnMatch ?? false,
     fixtures: rule.fixtures,
+    regexLookbehind: rule.regexLookbehind,
     dryRun: rule.dryRun ?? false,
     runOn: rule.runOn ?? "always",
     predicateType: firstCriterion.predicateType,
@@ -591,6 +593,7 @@ function ruleFromDraft(rules: readonly Rule[], draft: VisualRuleDraft, existingI
       when: predicate,
       then: actionSet,
       ...(draft.fixtures === undefined ? {} : { fixtures: draft.fixtures }),
+      ...(draft.regexLookbehind === true ? { regexLookbehind: true } : {}),
       ...(draft.stopOnMatch ? { stopOnMatch: true } : {}),
       ...(draft.dryRun ? { dryRun: true } : {}),
       ...(draft.runOn !== "always" ? { runOn: draft.runOn } : {}),
@@ -600,7 +603,7 @@ function ruleFromDraft(rules: readonly Rule[], draft: VisualRuleDraft, existingI
 
 function predicateFromDraft(draft: VisualRuleDraft): RulePredicate | string {
   if (draft.conditionNodes !== undefined && draft.conditionNodes.length > 0) {
-    return predicateFromConditionNodes(draft.conditionNodes, draft.criteriaMode ?? "all");
+    return predicateFromConditionNodes(draft.conditionNodes, draft.criteriaMode ?? "all", draft.regexLookbehind === true);
   }
 
   const criteria = draft.criteria !== undefined
@@ -613,7 +616,7 @@ function predicateFromDraft(draft: VisualRuleDraft): RulePredicate | string {
   const predicates: RulePredicate[] = [];
 
   for (const criterion of criteria) {
-    const predicate = predicateFromCriterion(criterion);
+    const predicate = predicateFromCriterion(criterion, draft.regexLookbehind === true);
     if (typeof predicate === "string") {
       return predicate;
     }
@@ -652,19 +655,19 @@ function criterionFromDraftFields(draft: VisualRuleDraft): VisualCriterionDraft 
   };
 }
 
-function predicateFromCriterion(criterion: VisualCriterionDraft): RulePredicate | string {
+function predicateFromCriterion(criterion: VisualCriterionDraft, allowLookbehinds = false): RulePredicate | string {
   const bounds = criterion.predicateType === "fileAge" || criterion.predicateType === "frontmatterDateAge"
     ? [criterion.fileAgeOlderThanDays, criterion.fileAgeNewerThanDays]
     : criterion.predicateType === "wordCount" ? [criterion.wordCountMoreThan, criterion.wordCountLessThan] : [];
   if (bounds.some((value) => value.trim().length > 0 && parseOptionalPositiveDays(value) === undefined)) {
     return "Every nonempty numeric bound must be a finite number greater than zero.";
   }
-  const result = predicateFromCriterionBase(criterion);
+  const result = predicateFromCriterionBase(criterion, allowLookbehinds);
   if (typeof result === "string") return result;
   return criterion.negated ? { type: "not", predicate: result } : result;
 }
 
-function predicateFromCriterionBase(criterion: VisualCriterionDraft): RulePredicate | string {
+function predicateFromCriterionBase(criterion: VisualCriterionDraft, allowLookbehinds = false): RulePredicate | string {
   switch (criterion.predicateType) {
     case "tag": {
       const tag = normalizeTag(criterion.tag);
@@ -680,7 +683,7 @@ function predicateFromCriterionBase(criterion: VisualCriterionDraft): RulePredic
         return "Basename regex pattern is required.";
       }
       try {
-        compileRuleRegex(pattern);
+        compileRuleRegex(pattern, allowLookbehinds);
       } catch (error) {
         return "Basename pattern is not a valid regular expression. " + (error instanceof Error ? error.message : String(error));
       }
@@ -741,7 +744,7 @@ function predicateFromCriterionBase(criterion: VisualCriterionDraft): RulePredic
         return "H1 heading regex pattern is required.";
       }
       try {
-        compileRuleRegex(pattern);
+        compileRuleRegex(pattern, allowLookbehinds);
       } catch (error) {
         return "H1 heading pattern is not a valid regular expression. " + (error instanceof Error ? error.message : String(error));
       }
@@ -763,7 +766,7 @@ function predicateFromCriterionBase(criterion: VisualCriterionDraft): RulePredic
         return "Frontmatter regex pattern is required.";
       }
       try {
-        compileRuleRegex(pattern);
+        compileRuleRegex(pattern, allowLookbehinds);
       } catch (error) {
         return "Frontmatter regex pattern is not a valid regular expression. " + (error instanceof Error ? error.message : String(error));
       }
@@ -808,7 +811,7 @@ function predicateFromCriterionBase(criterion: VisualCriterionDraft): RulePredic
         return "Content regex pattern is required.";
       }
       try {
-        compileRuleRegex(pattern);
+        compileRuleRegex(pattern, allowLookbehinds);
       } catch (error) {
         return "Content regex pattern is not a valid regular expression. " + (error instanceof Error ? error.message : String(error));
       }
@@ -997,6 +1000,7 @@ function editableCriterionDraft(predicate: RulePredicate): VisualCriterionDraft 
 export function predicateFromConditionNodes(
   nodes: readonly VisualConditionNode[],
   topMode: "all" | "any",
+  allowLookbehinds = false,
 ): RulePredicate | string {
   if (nodes.length === 0) {
     return "At least one condition is required.";
@@ -1005,7 +1009,7 @@ export function predicateFromConditionNodes(
   const predicates: RulePredicate[] = [];
   for (const node of nodes) {
     if (node.kind === "criterion") {
-      const p = predicateFromCriterion(node.criterion);
+      const p = predicateFromCriterion(node.criterion, allowLookbehinds);
       if (typeof p === "string") return p;
       predicates.push(p);
     } else {
@@ -1015,7 +1019,7 @@ export function predicateFromConditionNodes(
       }
       const groupPredicates: RulePredicate[] = [];
       for (const c of group.conditions) {
-        const p = predicateFromCriterion(c);
+        const p = predicateFromCriterion(c, allowLookbehinds);
         if (typeof p === "string") return p;
         groupPredicates.push(p);
       }
