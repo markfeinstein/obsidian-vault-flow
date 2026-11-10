@@ -1,5 +1,6 @@
 import type { Rule } from "../engine";
 import type { RuleEditResult } from "./rule-editor-model";
+import { canonicalValue } from "../engine/value-utils";
 
 /** Optimistic, rule-level merge. A stale editor must never replace the full settings snapshot. */
 export function mergeRuleEdit(current: readonly Rule[], baseline: readonly Rule[], proposed: readonly Rule[]): RuleEditResult {
@@ -7,9 +8,9 @@ export function mergeRuleEdit(current: readonly Rule[], baseline: readonly Rule[
   const after = new Map(proposed.map((rule) => [rule.id, rule]));
   const latest = new Map(current.map((rule) => [rule.id, rule]));
   const changed = new Set([...before.keys(), ...after.keys()].filter((id) =>
-    JSON.stringify(before.get(id)) !== JSON.stringify(after.get(id))));
+    canonicalValue(before.get(id)) !== canonicalValue(after.get(id))));
   for (const id of changed) {
-    if (JSON.stringify(latest.get(id)) !== JSON.stringify(before.get(id))) {
+    if (canonicalValue(latest.get(id)) !== canonicalValue(before.get(id))) {
       return { status: "error", error: "This rule changed or was deleted while its editor was open. Reopen it before saving; newer settings were preserved." };
     }
   }

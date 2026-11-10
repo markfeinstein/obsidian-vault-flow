@@ -228,6 +228,10 @@ Useful commands:
 
 `package.json` is the version source of truth. Release tags are numeric versions such as `0.1.0` and must match `manifest.json`. The release workflow checks the build and publishes `main.js`, `manifest.json`, and `styles.css`.
 
+## Planning performance
+
+Planning first evaluates metadata and earlier rule actions in memory, loading a note body only if evaluation reaches a body-dependent condition. Compiled regexes are retained for the active immutable rule set. Vault and Bases previews release retained note text in favor of SHA-256 body baselines, and vault previews discard unchanged rows as planning completes. These optimizations preserve stale-plan checks and sequential rule semantics.
+
 ## Known limitations
 
 - Only Markdown files are processed.

@@ -2,6 +2,8 @@ import { getAllTags, normalizePath, parseFrontMatterTags, TExternalFile, TFolder
 import type { Frontmatter, FrontmatterValue, JsonScalar, NoteState, PlannedMutation, ReconciliationConverged } from "../engine";
 import type { CollisionPolicy } from "./settings";
 import { captureNoteIdentity, type NoteIdentity } from "./note-identity";
+import { canonicalValue as stableStringifyUnknown, rawFrontmatterEqual } from "../engine/value-utils";
+export { rawFrontmatterEqual } from "../engine/value-utils";
 
 const MAX_COLLISION_SUFFIX_ATTEMPTS = 10_000;
 const PROTECTED_VAULT_PATHS = [".trash"];
@@ -190,54 +192,6 @@ function cloneUnknownRecord(value: Record<string, unknown>): Record<string, unkn
   }
   const parsed: unknown = JSON.parse(JSON.stringify(value));
   return isPlainObject(parsed) ? parsed : Object.create(null) as Record<string, unknown>;
-}
-
-function stableStringifyUnknown(value: unknown): string {
-  return JSON.stringify(sortUnknown(value));
-}
-
-export function rawFrontmatterEqual(
-  left: Readonly<Record<string, unknown>>,
-  right: Readonly<Record<string, unknown>>,
-): boolean {
-  return JSON.stringify(sortRawFrontmatter(left)) === JSON.stringify(sortRawFrontmatter(right));
-}
-
-function sortRawFrontmatter(value: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
-  const sorted = Object.create(null) as Record<string, unknown>;
-  for (const key of Object.keys(value).sort()) {
-    sorted[key] = key === "tags" ? normalizeUnknownFrontmatterTags(value[key]) : sortUnknown(value[key]);
-  }
-  return sorted;
-}
-
-function normalizeUnknownFrontmatterTags(value: unknown): unknown {
-  if (typeof value === "string") {
-    return normalizeTagsForFrontmatter(value.split(/[\s,]+/));
-  }
-  if (Array.isArray(value)) {
-    const tags: string[] = [];
-    for (const item of value as unknown[]) {
-      if (typeof item === "string") tags.push(item);
-      else return sortUnknown(value);
-    }
-    return normalizeTagsForFrontmatter(tags);
-  }
-  return sortUnknown(value);
-}
-
-function sortUnknown(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(sortUnknown);
-  }
-  if (isPlainObject(value)) {
-    const sorted = Object.create(null) as Record<string, unknown>;
-    for (const key of Object.keys(value).sort()) {
-      sorted[key] = sortUnknown(value[key]);
-    }
-    return sorted;
-  }
-  return value;
 }
 
 function frontmatterFromCache(cache: CachedMetadata | null): Frontmatter {

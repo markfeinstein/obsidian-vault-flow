@@ -2,6 +2,8 @@ import { ConfirmationModal, Modal, moment, normalizePath, Notice, Platform, Plug
 import type { BasesAllOptions, TAbstractFile } from "obsidian";
 import { isMarkdownFile } from "./obsidian/adapter";
 import { mapWithConcurrency } from "./obsidian/concurrency";
+import { compactPreviewPlan } from "./obsidian/preview-snapshot";
+import { unknownValuesEqual } from "./engine/value-utils";
 import { cliError, formatCliDiagnostics, formatCliPlan, formatCliStatus, parseCliTrigger } from "./obsidian/cli";
 import { VAULT_FLOW_BASES_VIEW_TYPE, VaultFlowBasesView } from "./obsidian/bases-view";
 import { DiagnosticLogModal } from "./obsidian/diagnostic-log-modal";
@@ -767,13 +769,14 @@ export default class VaultFlowPlugin extends Plugin {
       const results = await mapWithConcurrency(
         files,
         4,
-        async (file) => planReconciliationForFile(
+        async (file) => compactPreviewPlan(await planReconciliationForFile(
           this.app,
           file,
           settings,
           { now, triggerContext: "manual" },
-        ),
+        )),
         {
+          retainResult: (plan) => !["unchanged", "excluded"].includes(plan.preview.outcome),
           isCancelled: () => progress.isCancelled()
             || !this.loaded
             || this.settingsReadOnly
@@ -1368,24 +1371,6 @@ function replaceUnknownRecord(target: Record<string, unknown>, source: Record<st
       writable: true,
     });
   }
-}
-
-function unknownValuesEqual(left: unknown, right: unknown): boolean {
-  return JSON.stringify(sortUnknownValue(left)) === JSON.stringify(sortUnknownValue(right));
-}
-
-function sortUnknownValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(sortUnknownValue);
-  }
-  if (isRecord(value)) {
-    const sorted = Object.create(null) as Record<string, unknown>;
-    for (const key of Object.keys(value).sort()) {
-      sorted[key] = sortUnknownValue(value[key]);
-    }
-    return sorted;
-  }
-  return value;
 }
 
 function cloneUnknownRecord(value: Record<string, unknown>): Record<string, unknown> {

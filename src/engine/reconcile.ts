@@ -1,5 +1,6 @@
 import { compilePathGlob } from "./path-glob";
-import { compileRuleRegex } from "./rule-regex";
+import { canonicalValue, sortValue } from "./value-utils";
+import { compileRuleRegex, regexCompilerForRules, type RuleRegex } from "./rule-regex";
 import type {
   DryRunRuleMatch,
   Frontmatter,
@@ -62,6 +63,7 @@ export function reconcileFileState(input: ReconciliationInput): ReconciliationRe
     .sort(compareRules);
   const maxIterations = Math.max(0, input.options.maxIterations);
 
+  const predicateContext: PredicateContext = { compile: regexCompilerForRules(input.rules), missingBody: input.options.onMissingBodyContent, bodyCache: new Map() };
   const seen = new Map<string, number>();
   const states: NoteState[] = [initial];
   const appliedRuleIds: RuleId[] = [];
@@ -74,7 +76,7 @@ export function reconcileFileState(input: ReconciliationInput): ReconciliationRe
 
   for (let iteration = 0; iteration < maxIterations; iteration += 1) {
     const current = states[states.length - 1];
-    const evaluation = evaluateRules(current, rules, now, dateFormatter, iteration + 1, input.options.onRuleEvaluated);
+    const evaluation = evaluateRules(current, rules, now, dateFormatter, iteration + 1, input.options.onRuleEvaluated, predicateContext);
     appendUnique(appliedRuleIds, evaluation.appliedRuleIds);
     appendUnique(dryRunRuleIds, evaluation.dryRunRuleIds);
     upsertDryRunMatches(dryRunMatches, evaluation.dryRunMatches);
@@ -161,6 +163,7 @@ function evaluateRules(
   dateFormatter: (timestamp: number, format: string) => string,
   iteration: number,
   onRuleEvaluated?: (trace: RuleEvaluationTrace) => void,
+  context: PredicateContext = {},
 ): EvaluationResult {
   let nextState = state;
   const appliedRuleIds: RuleId[] = [];
@@ -172,7 +175,8 @@ function evaluateRules(
   let stoppedOnMatch = false;
 
   for (const rule of rules) {
-    const predicate = evaluatePredicate(rule.when, nextState, now, onRuleEvaluated !== undefined);
+    const needsCaptures = onRuleEvaluated !== undefined || [rule.then.moveTo, rule.then.renameTo].some((template) => template !== undefined && /\{\d+\}/u.test(template));
+    const predicate = evaluatePredicate(rule.when, nextState, now, onRuleEvaluated !== undefined, { ...context, captures: needsCaptures });
     if (!predicate.matched) {
       if (predicate.trace !== undefined) onRuleEvaluated?.({ iteration, ruleId: rule.id, ruleName: rule.name,
         outcome: "not-matched", predicate: predicate.trace, before: nextState, after: nextState, messages: [] });
@@ -257,7 +261,7 @@ function evaluateRules(
 // Predicate evaluation
 // ---------------------------------------------------------------------------
 
-function predicateMatches(predicate: RulePredicate, state: NoteState, now: number): boolean {
+function predicateMatches(predicate: RulePredicate, state: NoteState, now: number, compile: (pattern: string) => RuleRegex = compileRuleRegex): boolean {
   switch (predicate.type) {
     case "tag": {
       const expectedTagKey = tagComparisonKey(predicate.tag);
@@ -266,7 +270,7 @@ function predicateMatches(predicate: RulePredicate, state: NoteState, now: numbe
     case "pathGlob":
       return globMatches(predicate.glob, state.path);
     case "basename":
-      return basenameMatches(predicate.pattern, state.basename);
+      return basenameMatches(predicate.pattern, state.basename, compile);
     case "frontmatterValue":
       return frontmatterValueMatches(predicate.property, predicate.value, state.frontmatter);
     case "frontmatterExists":
@@ -280,7 +284,7 @@ function predicateMatches(predicate: RulePredicate, state: NoteState, now: numbe
     case "fileAge":
       return fileAgeMatches(predicate.field, predicate.olderThanDays, predicate.newerThanDays, state.stat, now);
     case "bodyH1":
-      return state.bodyH1 !== undefined && basenameMatches(predicate.pattern, state.bodyH1);
+      return state.bodyH1 !== undefined && basenameMatches(predicate.pattern, state.bodyH1, compile);
     case "contentContains":
       return state.bodyContent !== undefined && state.bodyContent.includes(predicate.text);
     case "all":
@@ -299,7 +303,7 @@ function predicateMatches(predicate: RulePredicate, state: NoteState, now: numbe
       }
       try {
         const text = typeof fmrValue === "object" ? JSON.stringify(fmrValue) : String(fmrValue);
-        return compileRuleRegex(predicate.pattern).test(text);
+        return compile(predicate.pattern).test(text);
       } catch {
         return false;
       }
@@ -353,7 +357,7 @@ function predicateMatches(predicate: RulePredicate, state: NoteState, now: numbe
         return false;
       }
       try {
-        return compileRuleRegex(predicate.pattern).test(state.bodyContent);
+        return compile(predicate.pattern).test(state.bodyContent);
       } catch {
         return false;
       }
@@ -797,14 +801,26 @@ export interface PredicateEvaluation {
 
 /** `any` takes its first successful branch; `all` takes the first nonempty
  * capture set of each kind from successful children. Negation exports none. */
-export function evaluatePredicate(predicate: RulePredicate, state: NoteState, now: number, trace = false): PredicateEvaluation {
+interface PredicateContext {
+  readonly compile?: (pattern: string) => RuleRegex;
+  readonly missingBody?: () => never;
+  readonly captures?: boolean;
+  readonly bodyCache?: Map<RulePredicate, PredicateEvaluation>;
+}
+
+export function evaluatePredicate(predicate: RulePredicate, state: NoteState, now: number, trace = false, context: PredicateContext = {}): PredicateEvaluation {
+  const compile = context.compile ?? compileRuleRegex;
+  const bodyLeaf = predicate.type === "contentContains" || predicate.type === "contentRegex" || predicate.type === "wordCount";
+  if (bodyLeaf && state.bodyContent === undefined) context.missingBody?.();
+  const cached = !trace && bodyLeaf ? context.bodyCache?.get(predicate) : undefined;
+  if (cached !== undefined) return context.captures === false ? { ...cached, captures: [], contentCaptures: [] } : cached;
   const children: PredicateTrace[] | undefined = trace ? [] : undefined;
   const finish = (matched: boolean, captures: readonly string[] = [], contentCaptures: readonly string[] = []): PredicateEvaluation => ({
     matched, captures, contentCaptures,
     ...(trace ? { trace: { predicate, matched, captures, contentCaptures, children } } : {}),
   });
   const evaluate = (child: RulePredicate): PredicateEvaluation => {
-    const result = evaluatePredicate(child, state, now, trace);
+    const result = evaluatePredicate(child, state, now, trace, context);
     if (result.trace !== undefined) children?.push(result.trace);
     return result;
   };
@@ -827,13 +843,17 @@ export function evaluatePredicate(predicate: RulePredicate, state: NoteState, no
     return finish(true, captures, contentCaptures);
   }
   if (predicate.type === "not") {
-    if (state.bodyContent === undefined && predicateNeedsBodyContent(predicate.predicate)) return finish(false);
+    if (context.missingBody === undefined && state.bodyContent === undefined && predicateNeedsBodyContent(predicate.predicate)) return finish(false);
     return finish(!evaluate(predicate.predicate).matched);
   }
-  if (!predicateMatches(predicate, state, now)) return finish(false);
-  if (predicate.type === "basename") return finish(true, compileRuleRegex(predicate.pattern).captures(state.basename));
-  if (predicate.type === "contentRegex") return finish(true, [], compileRuleRegex(predicate.pattern).captures(state.bodyContent ?? ""));
-  return finish(true);
+  const matched = predicateMatches(predicate, state, now, compile);
+  let result = finish(matched);
+  if (matched && predicate.type === "basename" && context.captures !== false) result = finish(true, compile(predicate.pattern).captures(state.basename));
+  // Cache the full capture set only when requested. A later rule sharing this
+  // predicate may need captures even if the first matching action did not.
+  if (matched && predicate.type === "contentRegex" && context.captures !== false) result = finish(true, [], compile(predicate.pattern).captures(state.bodyContent ?? ""));
+  if (!trace && bodyLeaf && (predicate.type !== "contentRegex" || !matched || context.captures !== false)) context.bodyCache?.set(predicate, result);
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -1068,9 +1088,9 @@ function appendToPropertyOnState(state: NoteState, properties: Readonly<Record<s
 // Predicate helpers
 // ---------------------------------------------------------------------------
 
-function basenameMatches(pattern: string, basename: string): boolean {
+function basenameMatches(pattern: string, basename: string, compile: (pattern: string) => RuleRegex = compileRuleRegex): boolean {
   try {
-    const regex = compileRuleRegex(pattern);
+    const regex = compile(pattern);
     return regex.test(basename);
   } catch {
     return false;
@@ -1414,7 +1434,7 @@ function stableStringifyNoteState(state: NoteState): string {
     path: state.path,
     basename: state.basename,
     extension: state.extension,
-    frontmatter: sortedFrontmatter(state.frontmatter),
+    frontmatter: sortValue(state.frontmatter),
     frontmatterKeys: stateFrontmatterKeys(state),
     tags: state.tags,
     frontmatterTags: stateFrontmatterTags(state),
@@ -1422,33 +1442,7 @@ function stableStringifyNoteState(state: NoteState): string {
 }
 
 function stableStringifyFrontmatter(frontmatter: Frontmatter): string {
-  return JSON.stringify(sortedFrontmatter(frontmatter));
-}
-
-function sortedFrontmatter(frontmatter: Frontmatter): Frontmatter {
-  const sorted = Object.create(null) as Frontmatter;
-  for (const key of Object.keys(frontmatter).sort()) {
-    sorted[key] = sortFrontmatterValue(frontmatter[key]);
-  }
-  return sorted;
-}
-
-function sortFrontmatterValue(value: FrontmatterValue): FrontmatterValue {
-  if (Array.isArray(value)) {
-    return [...value];
-  }
-
-  if (value !== null && typeof value === "object") {
-    const sorted = Object.create(null) as Record<string, string | number | boolean | null>;
-    for (const key of Object.keys(value).sort()) {
-      if (!isUnsafeObjectKey(key)) {
-        sorted[key] = value[key];
-      }
-    }
-    return sorted;
-  }
-
-  return value;
+  return canonicalValue(frontmatter);
 }
 
 function isUnsafeObjectKey(key: string): boolean {
