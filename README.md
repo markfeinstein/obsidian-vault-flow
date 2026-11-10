@@ -255,7 +255,7 @@ Useful commands:
 
 ## Releases
 
-`package.json` is the version source of truth. Release tags are numeric versions such as `0.1.0` and must match `manifest.json`. The release workflow checks the build and publishes `main.js`, `manifest.json`, and `styles.css`.
+`package.json` is the version source of truth. Release tags are numeric versions such as `0.1.0` and must match `manifest.json`. A read-only full-history secret scan must succeed before the release publishing job can start. Both jobs check out the exact tagged event commit; the scan includes merged lineages even when the tag push has no commit payload. The release job then checks the build and publishes `main.js`, `manifest.json`, and `styles.css`.
 
 ## Interrupted-write recovery
 
