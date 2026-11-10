@@ -249,7 +249,7 @@ Useful commands:
 - `npm run verify:versions`: check version metadata
 - `npm run sync:version`: update `manifest.json` and `versions.json` from `package.json`
 - `npm run test:obsidian:prepare`: create an isolated synthetic test vault
-- `npm run test:obsidian -- --root … --vault … --cli … --allow-runtime`: run the opt-in desktop smoke driver against that exact generated vault
+- `npm run test:obsidian -- --root … --vault … --cli … --profile … --allow-runtime`: run the opt-in desktop smoke driver against that exact generated vault/profile
 
 `main.js` is generated but committed because it is a release asset. See [validation and release gates](docs/validation.md) for the synthetic smoke flow, API/toolchain decisions, and unverified real-application scenarios.
 
@@ -287,6 +287,8 @@ Fixtures are saved and exported with rules: do not copy private note content int
 
 Planning first evaluates metadata and earlier rule actions in memory, loading a note body only if evaluation reaches a body-dependent condition. Compiled regexes are retained for the active immutable rule set. Vault and Bases previews release retained note text in favor of SHA-256 body baselines, and vault previews discard unchanged rows as planning completes. These optimizations preserve stale-plan checks and sequential rule semantics.
 
+[Isolated 1k/10k-note host measurements](docs/desktop-matrix-2026-11-09.md#synthetic-host-planning-measurements) verified zero body-read API calls for metadata-only previews and bounded body-read concurrency/cancellation. These synthetic measurements have different application cache states and sampled memory; they are not representative-vault performance guarantees.
+
 ## Known limitations
 
 - Only Markdown files are processed.
@@ -296,7 +298,8 @@ Planning first evaluates metadata and earlier rule actions in memory, loading a 
 - Rules are limited to 1,000 per settings snapshot, 64 levels of input nesting, 8,192 input values/containers per rule, and 65,536 across the ruleset (including fixtures and unknown fields). Oversized imports are rejected; oversized saved settings disable automation without overwriting the file.
 - Globs use the `*`, `**`, and `?` dialect and are limited to 1,024 characters.
 - Regexes use RE2-compatible syntax rather than the full JavaScript RegExp syntax.
-- Automated checks are source/headless verification, not runtime confirmation. Minimum/current desktop, physical mobile devices, Sync, external-file views, pop-out windows, accessibility, crash/storage recovery, and very large vaults require the [application validation matrix](docs/validation.md).
+- Planning uses Obsidian's loaded file/metadata index, not an independent filesystem inventory. A [synthetic bulk-import check observed an incomplete live host index](docs/desktop-matrix-2026-11-09.md#observed-index-shortfall-during-live-bulk-creation) despite intact files; a controlled test-profile restart recovered the full index. Pause writes and inspect unexpected counts rather than assuming an import or Sync has fully settled.
+- Automated checks are source/headless verification, not runtime confirmation. Fresh full smokes passed on minimum **1.14.4** and current public **1.15.0** on macOS arm64. [Selected desktop editing, pop-out, keyboard/AX, storage/restart and scale checks](docs/desktop-matrix-2026-11-09.md) add bounded host evidence; [earlier controlled interruption testing](docs/desktop-validation-2026-11-09.md) is retained separately. Physical mobile devices, other desktop platforms, multi-device Sync, external-file views, broad accessibility, comprehensive crash/storage recovery and representative vault/rule distributions still require the [application validation matrix](docs/validation.md).
 
 ## License
 
