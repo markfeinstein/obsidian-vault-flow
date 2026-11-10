@@ -606,7 +606,7 @@ describe("parsePropertyList", () => {
   });
 
   it("handles space-separated", () => {
-    expect(parsePropertyList("a b c")).toEqual(["a", "b", "c"]);
+    expect(parsePropertyList("a b c")).toEqual(["a b c"]);
   });
 
   it("returns empty array for blank", () => {

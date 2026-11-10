@@ -289,7 +289,8 @@ export function createRuleFromDraft(rules: readonly Rule[], draft: VisualRuleDra
     return ruleResult;
   }
 
-  return { status: "ok", rules: reindexRules([...rules, ruleResult.rule]) };
+  const appended = { ...ruleResult.rule, priority: rules.length === 0 ? ruleResult.rule.priority : Math.max(...rules.map((rule) => rule.priority)) + 1, order: nextRuleOrder(rules) };
+  return { status: "ok", rules: [...rules, appended] };
 }
 
 export function updateRuleById(rules: readonly Rule[], ruleId: string, draft: VisualRuleDraft): RuleEditResult {
@@ -350,7 +351,7 @@ export function createDefaultRuleDraft(rules: readonly Rule[]): VisualRuleDraft 
   return {
     name: "",
     enabled: true,
-    priority: String(nextRuleOrder(rules)),
+    priority: String(rules.length === 0 ? 0 : Math.max(...rules.map((rule) => rule.priority)) + 1),
     order: String(nextRuleOrder(rules)),
     criteriaMode: "all",
     criteria: [],
@@ -447,7 +448,7 @@ export function draftFromRule(rule: Rule): VisualRuleDraft | null {
     setPropertiesJson: rule.then.setProperties === undefined ? "" : JSON.stringify(rule.then.setProperties, null, 2),
     initPropertiesJson: rule.then.initProperties === undefined ? "" : JSON.stringify(rule.then.initProperties, null, 2),
     appendToPropertyJson: rule.then.appendToProperty === undefined ? "" : JSON.stringify(rule.then.appendToProperty, null, 2),
-    deletePropertiesList: rule.then.deleteProperties?.join(", ") ?? "",
+    deletePropertiesList: rule.then.deleteProperties === undefined ? "" : JSON.stringify(rule.then.deleteProperties),
   };
 }
 
@@ -463,10 +464,14 @@ export function parseTags(value: string): readonly string[] {
 }
 
 export function parsePropertyList(value: string): readonly string[] {
-  return value
-    .split(/[\s,]+/u)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
+  if (value.trim().startsWith("[")) {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed) || !parsed.every((item: unknown) => typeof item === "string" && item.length > 0)) {
+      throw new Error("Delete properties must be a JSON array of nonempty property names.");
+    }
+    return parsed as string[];
+  }
+  return value.split(/[,\n]+/u).map((item) => item.trim()).filter((item) => item.length > 0);
 }
 
 export function parseSetPropertiesJson(value: string): SetPropertiesParseResult {
@@ -644,6 +649,12 @@ function criterionFromDraftFields(draft: VisualRuleDraft): VisualCriterionDraft 
 }
 
 function predicateFromCriterion(criterion: VisualCriterionDraft): RulePredicate | string {
+  const bounds = criterion.predicateType === "fileAge" || criterion.predicateType === "frontmatterDateAge"
+    ? [criterion.fileAgeOlderThanDays, criterion.fileAgeNewerThanDays]
+    : criterion.predicateType === "wordCount" ? [criterion.wordCountMoreThan, criterion.wordCountLessThan] : [];
+  if (bounds.some((value) => value.trim().length > 0 && parseOptionalPositiveDays(value) === undefined)) {
+    return "Every nonempty numeric bound must be a finite number greater than zero.";
+  }
   const result = predicateFromCriterionBase(criterion);
   if (typeof result === "string") return result;
   return criterion.negated ? { type: "not", predicate: result } : result;
@@ -808,11 +819,17 @@ function parseOptionalPositiveDays(value: string): number | undefined {
     return undefined;
   }
 
-  const num = parseFloat(trimmed);
+  const num = Number(trimmed);
   return Number.isFinite(num) && num > 0 ? num : undefined;
 }
 
 function parseFrontmatterValueString(raw: string): string | number | boolean | null {
+  if (raw.startsWith('"')) {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (typeof parsed === "string") return parsed;
+    } catch { /* Unquoted text remains supported for existing editor workflows. */ }
+  }
   if (raw === "null") {
     return null;
   }
@@ -852,7 +869,9 @@ function actionSetFromDraft(draft: VisualRuleDraft): RuleActionSet | string {
   const addTags = parseTags(draft.addTags);
   const removeTags = parseTags(draft.removeTags);
   const replaceTags = draft.replaceTagsEnabled ? parseTags(draft.replaceTags) : undefined;
-  const deleteProperties = parsePropertyList(draft.deletePropertiesList);
+  let deleteProperties: readonly string[];
+  try { deleteProperties = parsePropertyList(draft.deletePropertiesList); }
+  catch { return "Delete properties must be a JSON string array or comma-separated property names."; }
 
   return {
     ...(moveTo.length === 0 ? {} : { moveTo, ...(draft.moveToKind === undefined || draft.moveToKind === "auto" ? {} : { moveToKind: draft.moveToKind }) }),
@@ -910,7 +929,7 @@ function editableCriterionDraft(predicate: RulePredicate): VisualCriterionDraft 
     case "basename":
       return { ...base, predicateType: "basename", basenamePattern: predicate.pattern };
     case "frontmatterValue":
-      return { ...base, predicateType: "frontmatterValue", frontmatterValueProperty: predicate.property, frontmatterValueValue: String(predicate.value ?? "null") };
+      return { ...base, predicateType: "frontmatterValue", frontmatterValueProperty: predicate.property, frontmatterValueValue: JSON.stringify(predicate.value) };
     case "frontmatterExists":
       return { ...base, predicateType: "frontmatterExists", frontmatterValueProperty: predicate.property };
     case "frontmatterMissing":
