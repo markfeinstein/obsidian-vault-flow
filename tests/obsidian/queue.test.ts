@@ -373,7 +373,7 @@ describe("ReconciliationQueue", () => {
 
     queue.enqueue(file, "manual");
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      await vi.advanceTimersByTimeAsync(10);
+      await vi.advanceTimersByTimeAsync(10 * 2 ** attempt);
       await settleAsyncQueue();
     }
 

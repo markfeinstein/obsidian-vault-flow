@@ -366,7 +366,9 @@ function applyDesiredFrontmatter(frontmatter: MutableFrontmatter, desired: NoteS
 
   const currentFrontmatterTags = noteFrontmatterTags(current);
   const desiredFrontmatterTags = noteFrontmatterTags(desired);
-  if (JSON.stringify(currentFrontmatterTags) !== JSON.stringify(desiredFrontmatterTags)) {
+  if (!desiredKeys.has("tags")) {
+    Reflect.deleteProperty(frontmatter, "tags");
+  } else if (JSON.stringify(currentFrontmatterTags) !== JSON.stringify(desiredFrontmatterTags)) {
     if (desiredFrontmatterTags.length > 0) {
       frontmatter.tags = desiredFrontmatterTags;
     } else {

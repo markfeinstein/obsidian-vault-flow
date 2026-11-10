@@ -211,6 +211,7 @@ export class ReconciliationQueue {
     try {
       const revision = this.getOptions().revision ?? 0;
       const completion = await this.reconcile(path, entry.file, entry.triggerContexts, generation, cancellationVersion);
+      if (completion === "reconciled") this.contentReadFailures.delete(path);
       if (completion === "reconciled" && !this.isStale(path, generation, cancellationVersion)) {
         await this.callbacks.onReconciled?.(entry.file, { triggerContexts: entry.triggerContexts, revision });
       }
@@ -334,11 +335,11 @@ export class ReconciliationQueue {
         this.contentReadFailures.delete(path);
         return "failed";
       }
-      this.requeue(path, file, triggerContexts);
+      this.requeue(path, file, triggerContexts, this.readRetryDelay(failureCount));
       return "deferred";
     }
 
-    this.contentReadFailures.delete(path);
+    // Keep failures through planning: the pre-apply read may still fail.
     return this.applyResult(
       file,
       plan.current,
@@ -588,7 +589,7 @@ export class ReconciliationQueue {
         this.contentReadFailures.delete(path);
         return "failed";
       }
-      this.requeue(path, file, triggerContexts);
+      this.requeue(path, file, triggerContexts, this.readRetryDelay(failureCount));
       return "deferred";
     }
     if (execution.status === "changed") {
@@ -628,7 +629,7 @@ export class ReconciliationQueue {
     return "reconciled";
   }
 
-  private requeue(path: string, file: TFile, triggerContexts: readonly RuleRunOn[]): void {
+  private requeue(path: string, file: TFile, triggerContexts: readonly RuleRunOn[], delayMs?: number): void {
     if (this.disposed) {
       return;
     }
@@ -637,7 +638,7 @@ export class ReconciliationQueue {
     const mergedTriggerContexts = existingEntry === undefined
       ? triggerContexts
       : mergeTriggerContextLists(existingEntry.triggerContexts, triggerContexts);
-    this.enqueueWithTriggerContexts(path, existingEntry?.file ?? file, mergedTriggerContexts);
+    this.enqueueWithTriggerContexts(path, existingEntry?.file ?? file, mergedTriggerContexts, delayMs);
   }
 
   private defer(path: string, file: TFile, triggerContexts: readonly RuleRunOn[]): void {
@@ -662,7 +663,7 @@ export class ReconciliationQueue {
     return this.callbacks.shouldDeferLiveWrite?.(file) === true;
   }
 
-  private enqueueWithTriggerContexts(path: string, file: TFile, triggerContexts: readonly RuleRunOn[]): void {
+  private enqueueWithTriggerContexts(path: string, file: TFile, triggerContexts: readonly RuleRunOn[], delayMs?: number): void {
     if (this.disposed) {
       return;
     }
@@ -676,7 +677,7 @@ export class ReconciliationQueue {
     const timer = window.setTimeout(() => {
       this.timers.delete(path);
       this.markReady(path);
-    }, debounceMs);
+    }, delayMs ?? debounceMs);
     this.timers.set(path, timer);
     this.notifySnapshotChanged();
   }
@@ -741,6 +742,10 @@ export class ReconciliationQueue {
 
   private now(): number {
     return this.callbacks.now?.() ?? Date.now();
+  }
+
+  private readRetryDelay(failureCount: number): number {
+    return Math.min(30_000, Math.max(1, this.getOptions().debounceMs) * 2 ** (failureCount - 1));
   }
 
   private incrementContentReadFailure(path: string): number {
