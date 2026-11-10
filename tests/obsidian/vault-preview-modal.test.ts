@@ -148,34 +148,52 @@ describe("VaultPreviewModal rendering", () => {
     const entries = Array.from({ length: 250 }, (_, index) => makeEntryForPath(`Inbox/${index}.md`));
     const { modal, root, button } = renderingHarness(entries);
     const harness = modal as unknown as { selected: Set<VaultPreviewEntry> };
-    expect(root.all("input")).toHaveLength(100);
+    expect(root.all("input").filter((el) => el.attributes.type === "checkbox")).toHaveLength(100);
     expect(button("Previous").disabled).toBe(true);
     expect(button("Apply selected").disabled).toBe(true);
-    const first = root.all("input")[0];
+    const first = root.all("input").filter((el) => el.attributes.type === "checkbox")[0];
     expect(first?.attributes["aria-label"]).toBe("Apply planned change for Inbox/0.md");
     expect(root.all("th").every((el) => el.attributes.scope === "col")).toBe(true);
     if (first === undefined) throw new Error("Missing first checkbox");
     first.checked = true;
     await first.fire("change");
     await button("Next").fire("click");
-    expect(root.all("input")).toHaveLength(100);
-    const secondPageFirst = root.all("input")[0];
+    expect(root.all("input").filter((el) => el.attributes.type === "checkbox")).toHaveLength(100);
+    const secondPageFirst = root.all("input").filter((el) => el.attributes.type === "checkbox")[0];
     if (secondPageFirst === undefined) throw new Error("Missing second-page checkbox");
     secondPageFirst.checked = true;
     await secondPageFirst.fire("change");
     await button("Next").fire("click");
-    expect(root.all("input")).toHaveLength(50);
+    expect(root.all("input").filter((el) => el.attributes.type === "checkbox")).toHaveLength(50);
     expect(button("Next").disabled).toBe(true);
-    expect(root.all("span").some((el) => el.textContent === "2 selected of 250 pending changes (all pages)")).toBe(true);
+    expect(root.all("span").some((el) => el.textContent === "2 selected of 250 pending changes (all pages); 250 match filters")).toBe(true);
     await button("Previous").fire("click");
     await button("Previous").fire("click");
-    expect(root.all("input")[0]?.checked).toBe(true);
+    expect(root.all("input").filter((el) => el.attributes.type === "checkbox")[0]?.checked).toBe(true);
     expect([...harness.selected]).toEqual([entries[0], entries[100]]);
-    const returned = root.all("input")[0];
+    const returned = root.all("input").filter((el) => el.attributes.type === "checkbox")[0];
     if (returned === undefined) throw new Error("Missing returned checkbox");
     returned.checked = false;
     await returned.fire("change");
     expect([...harness.selected]).toEqual([entries[100]]);
+  });
+
+  it("selects only applyable filtered rows up to the batch limit and preserves hidden selections", async () => {
+    const entries = Array.from({ length: 201 }, (_, index) => makeEntryForPath(`${index < 150 ? "Inbox" : "Archive"}/${index}.md`));
+    const { modal, root, button } = renderingHarness(entries);
+    const harness = modal as unknown as { selected: Set<VaultPreviewEntry> };
+    await button("Select filtered (batch limit)").fire("click");
+    expect(harness.selected.size).toBe(100);
+    const search = root.all("input").find((el) => el.attributes.type === "search") as unknown as HTMLInputElement & TestElement;
+    search.value = "Archive";
+    await search.fire("input");
+    expect(root.all("span").some((el) => el.textContent.includes("100 selected outside filters"))).toBe(true);
+    await button("Deselect filtered").fire("click");
+    expect(harness.selected.size).toBe(100);
+    await button("Clear selection").fire("click");
+    await button("Select filtered (batch limit)").fire("click");
+    expect(harness.selected.size).toBe(51);
+    expect([...harness.selected].every((entry) => entry.path.startsWith("Archive/"))).toBe(true);
   });
 
   it("applies exactly the selected rows, including off-page selections", async () => {
@@ -203,8 +221,8 @@ describe("VaultPreviewModal rendering", () => {
   it("does not preselect non-applyable rows", () => {
     const entry = { ...makeNullResultEntry(makeState()), selected: true };
     const { root, button } = renderingHarness([entry]);
-    expect(root.all("input")[0]?.checked).toBe(false);
-    expect(root.all("input")[0]?.disabled).toBe(true);
+    expect(root.all("input").filter((el) => el.attributes.type === "checkbox")[0]?.checked).toBe(false);
+    expect(root.all("input").filter((el) => el.attributes.type === "checkbox")[0]?.disabled).toBe(true);
     expect(button("Apply selected").disabled).toBe(true);
   });
 });

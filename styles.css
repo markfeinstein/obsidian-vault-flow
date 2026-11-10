@@ -123,6 +123,19 @@
   text-transform: capitalize;
 }
 
+.vf-preview-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--size-4-2);
+  margin-block: var(--size-4-2);
+}
+
+.vf-preview-controls input {
+  flex: 1 1 15em;
+  min-width: 0;
+}
+
 .vf-preview-pagination {
   display: flex;
   align-items: center;
