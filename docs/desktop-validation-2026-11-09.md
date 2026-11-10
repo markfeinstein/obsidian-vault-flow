@@ -2,6 +2,8 @@
 
 ## Scope and verdict
 
+**Subsequent follow-up:** the first-party desktop feed confirmed public 1.15.0 and beta 1.15.1, correcting the earlier current-version label below. The updated window-aware harness now has fresh, fully passing 1.14.4 and 1.15.0 runs; see [current desktop smoke evidence](validation.md#required-application-matrix). This document preserves the earlier partial reports and targeted recovery evidence rather than relabeling them as full smoke passes.
+
 Actual host: **Obsidian 1.15.0, macOS arm64**. Only newly generated synthetic vaults and temporary application profiles were controlled. Normal Obsidian, real notes, existing plugin installations, and another agent's separate test instance were not controlled. All validation-owned application processes were stopped afterward; fixtures, profiles, logs, reports, and screenshots were retained locally.
 
 This establishes selected real-host behavior, **not completion of the application release matrix**. In particular, the installed version was neither the declared minimum 1.14.4 nor the 1.15.1 current-version gate recorded during review. Physical mobile, multi-device Sync, accessibility, representative large-vault performance, and comprehensive crash/storage coverage remain unverified.

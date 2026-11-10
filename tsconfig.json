@@ -23,6 +23,7 @@
   "include": [
     "src/**/*.ts",
     "tests/**/*.ts",
+    "scripts/**/*.d.mts",
     "eslint.config.mjs",
     "esbuild.config.mjs",
     "vitest.config.ts"

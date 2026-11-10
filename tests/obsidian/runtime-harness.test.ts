@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { sanitizeVaultFlowSettings } from "../../src/obsidian/settings";
@@ -51,7 +51,19 @@ describe("isolated runtime harness (mock CLI, not Obsidian runtime verification)
     expect(symlinked.stderr).toContain("must not be a symlink");
   });
 
-  it("exercises guarded command sequencing and parses JSON-quoted eval responses using a mock CLI", () => {
+  it("rejects relative and symlinked profile paths before consuming the fixture or accessing the CLI", () => {
+    const fixture = prepare();
+    const alias = join(fixture.parent, "profile-alias");
+    symlinkSync(fixture.parent, alias);
+    for (const profile of ["relative-profile", alias]) {
+      const result = spawnSync(process.execPath, [script, "--run", "--root", fixture.root, "--vault", "smoke", "--cli", process.execPath, "--profile", profile, "--allow-runtime"], { encoding: "utf8", timeout: 5_000 });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("canonical isolated application profile");
+      expect(existsSync(join(fixture.root, ".vault-flow-smoke-attempt.json"))).toBe(false);
+    }
+  });
+
+  it.each([false, true])("exercises guarded mock-CLI sequencing and JSON-quoted eval responses (profile=%s)", (withProfile) => {
     const fixture = prepare();
     const cli = join(fixture.parent, "mock-obsidian.mjs");
     const log = join(fixture.parent, "commands.jsonl");
@@ -121,12 +133,13 @@ else if (command === "vault-flow:plan-many") { const value = args.find(arg => ar
 else if (command === "vault-flow:test-rule") console.log(JSON.stringify({status:"ok", count:1, results:[{passed:true}]}));
 else if (command === "vault-flow:diagnostics") console.log(JSON.stringify({status:"ok", decisions:state.skipped ? [{path:"Inbox/Stale.md", outcome:"skipped", issueKind:"collision"}] : []}));
 else if (command === "base:query") console.log("Inbox/Example.md");
-else if (command === "eval") { const code = args.find(arg => arg.startsWith("code=")).slice(5); console.log(JSON.stringify(vm.runInNewContext(code, {app, activeDocument:doc}))); }
+else if (command === "eval") { const code = args.find(arg => arg.startsWith("code=")).slice(5); console.log(JSON.stringify(vm.runInNewContext(code, {app, activeDocument:doc, require: () => ({app:{getPath:()=>process.env.SMOKE_PROFILE},getCurrentWindow:()=>({focus(){}})})}))); }
 else if (command === "dev:errors") console.log("No errors");
 `, { mode: 0o700 });
-    const result = spawnSync(process.execPath, [script, "--run", "--root", fixture.root, "--vault", "smoke", "--cli", cli, "--allow-runtime"], {
+    const runArgs = [script, "--run", "--root", fixture.root, "--vault", "smoke", "--cli", cli, "--allow-runtime", ...(withProfile ? ["--profile", fixture.parent] : [])];
+    const result = spawnSync(process.execPath, runArgs, {
       encoding: "utf8", timeout: 20_000,
-      env: { ...process.env, SMOKE_ROOT: fixture.root, SMOKE_LOG: log, SMOKE_STATE: statePath },
+      env: { ...process.env, SMOKE_ROOT: fixture.root, SMOKE_LOG: log, SMOKE_STATE: statePath, SMOKE_PROFILE: fixture.parent },
     });
     expect(result.status, result.stderr + result.stdout).toBe(0);
     const receipt = JSON.parse(result.stdout) as { status: string; reportPath: string; checks: string[] };
@@ -138,17 +151,30 @@ else if (command === "dev:errors") console.log("No errors");
     const calls = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[]);
     expect(calls.every((args) => args[0] === "vault=smoke")).toBe(true);
     expect(calls.filter((args) => args[1] === "eval").every((args) => args[2]?.includes("getBasePath() !=="))).toBe(true);
+    if (withProfile) expect(calls.filter((args) => args[1] === "eval").every((args) => args[2]?.includes("getPath('userData')"))).toBe(true);
     expect(readFileSync(receipt.reportPath, "utf8")).toContain("1.15.1 mock");
     expect(receipt.checks).toContain("shared batch destinations are reserved, refreshed, confirmed, and applied exactly");
     expect(receipt.checks).toContain("late collision skips without renaming; inbox replans read-only for a new review");
     expect(receipt.checks).toContain("settings revision review, cancellation, confirmed restore, and explicit resume");
     expect(calls.filter((args) => args[1] === "create")).toHaveLength(1);
     const before = calls.length;
-    const retry = spawnSync(process.execPath, [script, "--run", "--root", fixture.root, "--vault", "smoke", "--cli", cli, "--allow-runtime"], {
-      encoding: "utf8", timeout: 5_000, env: { ...process.env, SMOKE_ROOT: fixture.root, SMOKE_LOG: log, SMOKE_STATE: statePath },
+    const retry = spawnSync(process.execPath, runArgs, {
+      encoding: "utf8", timeout: 5_000, env: { ...process.env, SMOKE_ROOT: fixture.root, SMOKE_LOG: log, SMOKE_STATE: statePath, SMOKE_PROFILE: fixture.parent },
     });
     expect(retry.status).toBe(1);
     expect(retry.stderr).toContain("already attempted");
     expect(readFileSync(log, "utf8").trim().split("\n")).toHaveLength(before);
+    if (withProfile) {
+      const rejected = prepare();
+      const rejectedLog = join(rejected.parent, "rejected-commands.jsonl");
+      const mismatch = spawnSync(process.execPath, [script, "--run", "--root", rejected.root, "--vault", "smoke", "--cli", cli, "--profile", rejected.parent, "--allow-runtime"], {
+        encoding: "utf8", timeout: 5_000,
+        env: { ...process.env, SMOKE_ROOT: rejected.root, SMOKE_LOG: rejectedLog, SMOKE_STATE: join(rejected.parent, "state.json"), SMOKE_PROFILE: "/different/profile" },
+      });
+      expect(mismatch.status).toBe(1);
+      expect(mismatch.stderr).toContain("Smoke profile mismatch");
+      const rejectedCalls = readFileSync(rejectedLog, "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[]);
+      expect(rejectedCalls.some((args) => ["open", "command", "create"].includes(args[1]))).toBe(false);
+    }
   }, 20_000);
 });

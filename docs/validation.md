@@ -30,31 +30,38 @@ The driver only targets a freshly generated fixture vault and retains all fixtur
 
 1. Run `npm run check`.
 2. Run `npm run test:obsidian:prepare` to obtain the exact generated root.
-3. Manually open that root in Obsidian, inspect/trust the synthetic plugin, and obtain the exact vault ID plus the absolute path to the official CLI.
+3. Open that root in a **separate temporary application profile**, registering no real vaults. Launch the test application with `--user-data-dir=/canonical/isolated/profile --remote-debugging-address=127.0.0.1 --remote-debugging-port=0`. Inspect/trust only the generated plugin and enable the CLI only in that profile; skip PATH registration. Obtain the exact vault ID and absolute official CLI path for that application version. Coordinate other instances first: the native CLI socket is shared even with separate profiles.
 4. With explicit runtime authorization, run:
 
    ```sh
-   npm run test:obsidian -- --root /exact/generated/root --vault EXACT_ID --cli /absolute/official/obsidian --allow-runtime
+   npm run test:obsidian -- --root /exact/generated/root --vault EXACT_ID --cli /absolute/official/obsidian --profile /canonical/isolated/profile --allow-runtime
    ```
 
-The driver validates the vault path and copied bundle hash, has a 90-second overall deadline, and never retries a mutation automatically. A timed-out mutation has an unknown outcome: inspect the exact synthetic note and report before starting again. Every attempted run consumes an exclusive fixture marker before any CLI access, even if it fails without an observable note change. Prepare a new fixture for each run; do not point it at an existing user vault.
+The driver validates the vault path and copied bundle hash. With `--profile`, it also checks the exact application profile before every eval; relative/symlinked profile paths are rejected before CLI access. It reads the profile's `DevToolsActivePort` for native Settings, accepts only the exact loopback endpoint and a unique matching renderer, rechecks the main profile/vault before each Settings operation, and captures that owned window separately. It supports both main-document settings and the newer separate native window without choosing an arbitrary active window. It has a 90-second overall deadline, and never retries a mutation automatically. A timed-out mutation has an unknown outcome: inspect the exact synthetic note and report before starting again. Every attempted run consumes an exclusive fixture marker before any CLI access, even if it fails without an observable note change. Prepare a new fixture for each run; do not point it at an existing user vault.
 
 It exercises registered asynchronous CLI handlers, synthetic rule fixtures, active-note diff expansion, filtered/grouped bulk selection, explicit apply and undo confirmations, public rename/link behavior, typed property writes, acknowledgment of completed pending-write records, native Base paths feeding bounded planning, custom Bases rendering, native settings navigation, and captured application errors.
 
 The follow-up flow also verifies two notes sharing a destination receive distinct names **before** confirmation and arrive at those exact reviewed paths with their own bodies. It deliberately creates one new synthetic destination occupant after review, verifies apply skips instead of overwriting or silently renaming, and opens a fresh read-only preview through the failed-work inbox. Settings-history review is canceled once and then explicitly confirmed; the smoke verifies the unchanged baseline retains dry-run and stays paused until explicit resume. A separate native-window test verified an actual 500 → 750 → 500 timing change/restore on desktop 1.15.0; broader configuration/conflict coverage in the matrix remains required.
 
-The mock-CLI harness tests command sequencing and guards only. Its successful report is not evidence that any of these flows work in an actual Obsidian host.
+The mock-CLI and mocked-CDP harnesses test command sequencing, profile/vault/renderer guards, expired deadlines, awaited results, and scoped Settings closure only. Its successful report is not evidence that any of these flows work in an actual Obsidian host.
 
 ## Required application matrix
 
-Selected flows have now been exercised in isolated **Obsidian 1.15.0 on macOS arm64**, including apply/undo, reviewed collisions, settings restore/external reload, journal failure, and interrupted-write restart. See the [dated desktop evidence and recovery inspection fix](desktop-validation-2026-11-09.md) for artifact identities, actual outcomes, and retained reports.
+Fresh full smoke runs now pass on **minimum Obsidian 1.14.4 and current public 1.15.0 on macOS arm64**, with thirteen stages each, including the actual native Settings window and captured application errors. Both application and installer versions were checked. The older app was a hash-verified, code-signature-verified, notarized temporary copy; the installed application was not replaced. The first-party [desktop update feed](https://raw.githubusercontent.com/obsidianmd/obsidian-releases/master/desktop-releases.json) checked 2026-11-09 identifies 1.15.0 as public and 1.15.1 as beta, correcting the earlier review's current-version label.
 
-The original smoke report remains **partial** at its native-settings window assumption; that page was verified separately, not relabeled as a passing end-to-end smoke. The matrix below is still required: one desktop version and controlled fault injection do not establish minimum/current desktop, mobile, Sync, performance, or comprehensive recovery support. Record each scenario's version/platform, exact fixture, result, and retained report before extending runtime claims.
+| Version | Fresh fixture | Retained full smoke report | Result |
+| --- | --- | --- | --- |
+| 1.14.4 / installer 1.14.4 | `vault-flow-smoke-GsGdWL` | `.vault-flow-smoke-result-1794272008919.json` | 13 stages passed |
+| 1.15.0 / installer 1.15.0 | `vault-flow-smoke-c9rtJR` | `.vault-flow-smoke-result-1794271793848.json` | 13 stages passed |
+
+Both fixtures copied bundle SHA-256 `83f2a89962638b4718ece320d24f7e28b3ceff919ab9f857382333e3571cf488`, ran once with exact profile/vault guards, and retained separate main-window and Settings screenshots. These are actual host runs, unlike the mocked protocol tests. The earlier partial smoke remains retained as a partial historical result, not relabeled green.
+
+Additional 1.15.0 native editing, changed-value settings restore/external reload, simulated journal failure, and controlled interrupted-write restart are recorded in the [dated desktop evidence and recovery inspection fix](desktop-validation-2026-11-09.md). Broader matrix scenarios remain required: two desktop smoke runs and controlled fault injection do not establish mobile, multi-device Sync, accessibility, representative performance, or comprehensive recovery support. Record each scenario's version/platform, exact fixture, result, and retained report before extending runtime claims.
 
 | Gate | Smallest useful next check |
 | --- | --- |
 | Minimum supported desktop (1.14.4) | Fresh generated vault: smoke flow, native settings/Bases/CLI registration, apply/undo/reload. |
-| Current desktop (1.15.1 at review time) | Same smoke flow; verify asynchronous single/multi-note CLI responses and earlier workspace display with delayed indexing. |
+| Current public desktop (1.15.0; 1.15.1 is beta in the first-party feed checked 2026-11-09) | Same smoke flow; verify asynchronous single/multi-note CLI responses and earlier workspace display with delayed indexing. |
 | iOS and Android | Disposable synthetic vault: load plugin, edit rule, preview/apply/undo, content predicates, timing, and memory. Browser-compatible bundling alone is insufficient. |
 | Sync/external settings | Two disposable devices: open editor, change another rule externally, save; then change the same rule and confirm conflict rejection. Capture revision history before invalid/new-schema reloads; do not overwrite incompatible settings. |
 | Settings revisions | Change scalar types, ordering, scope, dry-run, and timing controls; restore an older revision through confirmation. Verify values return, runtime/recovery remain, and writes stay paused. Repeat with a concurrent editor/Sync change, quota failure, and plugin restart. Keep external writers quiescent during restore; the public API has no cross-process compare-and-swap. |

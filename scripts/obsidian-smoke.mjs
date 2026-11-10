@@ -1,8 +1,10 @@
 import { spawnSync } from "node:child_process";
+import { Buffer } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
 import { copyFile, lstat, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { connectNativeSettings } from "./obsidian-settings-cdp.mjs";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -15,7 +17,7 @@ function options(args) {
   for (let index = 0; index < args.length; index += 1) {
     const key = args[index];
     if (["--prepare", "--run", "--allow-runtime", "--help"].includes(key)) result[key] = true;
-    else if (["--root", "--vault", "--cli", "--parent"].includes(key)) {
+    else if (["--root", "--vault", "--cli", "--parent", "--profile"].includes(key)) {
       const value = args[++index];
       if (!value || value.startsWith("--")) throw new Error(`Missing value for ${key}`);
       result[key] = value;
@@ -92,9 +94,11 @@ async function run(config) {
   if (!config["--vault"] || !config["--cli"] || !isAbsolute(config["--cli"])) throw new Error("Pass --vault=<name/id> as two arguments (--vault ID), and --cli with the absolute official CLI path.");
   const root = await validateRoot(config["--root"]);
   const cli = config["--cli"];
+  const profile = config["--profile"] ? resolve(config["--profile"]) : null;
+  if (profile && (!isAbsolute(config["--profile"]) || await realpath(profile) !== profile || !(await lstat(profile)).isDirectory())) throw new Error("--profile must be the absolute canonical isolated application profile directory.");
   const selector = `vault=${config["--vault"]}`;
   const startedAt = Date.now();
-  const report = { root, fixtureVersion: 2, platform: process.platform, architecture: process.arch, node: process.version, status: "partial", checks: [], commands: [], version: "", error: null };
+  const report = { root, profile, fixtureVersion: 2, platform: process.platform, architecture: process.arch, node: process.version, status: "partial", checks: [], commands: [], version: "", error: null };
   const reportPath = join(root, `.vault-flow-smoke-result-${Date.now()}.json`);
 
   function command(args) {
@@ -104,7 +108,7 @@ async function run(config) {
     report.commands.push({ command: args[0], status: result.status, stderr: result.stderr ?? "" });
     if (result.error || result.status !== 0) throw new Error(`${args[0]} failed or timed out. A timed-out mutation has unknown outcome; inspect the fixture before retrying. ${result.error?.message ?? result.stderr ?? ""}`);
     const output = (result.stdout ?? "").trim();
-    if (/^(?:Error:|Unknown command)/imu.test(output)) throw new Error(`${args[0]} returned an error: ${output}`);
+    if (/^(?:Error:|Unknown command|Command not found|Command line interface is not enabled)/imu.test(output)) throw new Error(`${args[0]} returned an error: ${output}`);
     return output;
   }
 
@@ -117,7 +121,8 @@ async function run(config) {
   // Every eval checks the actual desktop vault path in the same invocation before
   // touching DOM or notes. No unscoped command or active-vault fallback is used.
   function evaluate(body) {
-    const code = `(() => { if (app.vault.adapter.getBasePath() !== ${JSON.stringify(root)}) throw new Error("Smoke vault mismatch"); const doc = app.workspace.containerEl.ownerDocument; return "VF_SMOKE:" + JSON.stringify((() => { ${body} })()); })()`;
+    const profileGuard = profile ? `if (require('@electron/remote').app.getPath('userData') !== ${JSON.stringify(profile)}) throw new Error('Smoke profile mismatch');` : "";
+    const code = `(() => { if (app.vault.adapter.getBasePath() !== ${JSON.stringify(root)}) throw new Error("Smoke vault mismatch"); ${profileGuard} const doc = app.workspace.containerEl.ownerDocument; return "VF_SMOKE:" + JSON.stringify((() => { ${body} })()); })()`;
     let output = command(["eval", `code=${code}`]);
     try {
       const decoded = JSON.parse(output);
@@ -135,15 +140,20 @@ async function run(config) {
   async function waitForRead(check, label) {
     const deadline = Math.min(startedAt + deadlineMs, Date.now() + 8_000);
     while (Date.now() < deadline) {
-      if (check()) return;
+      if (await check()) return;
       await delay(150);
     }
     throw new Error(`Timed out waiting for ${label}. No mutation is retried automatically.`);
   }
 
-  function focusFixtureWindow() {
-    const focused = evaluate("const view = doc.defaultView; view.dispatchEvent(new view.Event('focus')); doc.dispatchEvent(new view.Event('focusin', {bubbles:true})); doc.body?.dispatchEvent(new view.Event('pointerdown', {bubbles:true})); return typeof activeDocument === 'undefined' || doc === activeDocument;");
-    if (!focused) throw new Error("The generated fixture window could not become Obsidian's active document.");
+  async function focusFixtureWindow() {
+    if (profile) {
+      evaluate("require('@electron/remote').getCurrentWindow().focus(); return true;");
+      await waitFor("return typeof activeDocument === 'undefined' || doc === activeDocument;", "the exact fixture main window's active document");
+    } else {
+      const focused = evaluate("const view = doc.defaultView; view.dispatchEvent(new view.Event('focus')); doc.dispatchEvent(new view.Event('focusin', {bubbles:true})); doc.body?.dispatchEvent(new view.Event('pointerdown', {bubbles:true})); return typeof activeDocument === 'undefined' || doc === activeDocument;");
+      if (!focused) throw new Error("The generated fixture window could not become Obsidian's active document.");
+    }
   }
 
   function clickButton(text) {
@@ -196,7 +206,7 @@ async function run(config) {
     report.checks.push("read-only CLI status, diagnostics, asynchronous bounded planning, and synthetic fixtures");
 
     command(["open", "path=Inbox/Example.md"]);
-    focusFixtureWindow();
+    await focusFixtureWindow();
     command(["command", "id=vault-flow:preview-active-note"]);
     await waitFor('return !!doc.querySelector(".modal-container .vf-property-diff");', "active-note preview");
     evaluate('doc.querySelector(".modal-container .vf-property-diff").open = true; return true;');
@@ -302,12 +312,30 @@ async function run(config) {
     command(["dev:screenshot", `path=${join(root, ".vault-flow-smoke-screenshot.png")}`]);
     report.checks.push("native Base query and custom view rendering");
 
-    focusFixtureWindow();
+    await focusFixtureWindow();
     command(["command", "id=app:open-settings"]);
-    await waitFor('return Array.from(doc.querySelectorAll(".vertical-tab-nav-item")).some(el => el.textContent.trim() === "Vault Flow");', "native settings navigation");
-    evaluate('Array.from(doc.querySelectorAll(".vertical-tab-nav-item")).find(el => el.textContent.trim() === "Vault Flow").click(); return true;');
-    await waitFor('const content = doc.querySelector(".vertical-tab-content"); return !!content && content.textContent.includes("Automation") && content.textContent.includes("Rules");', "declarative plugin settings");
-    closeTopModal();
+    const navigation = 'return Array.from(doc.querySelectorAll(".vertical-tab-nav-item")).some(el => el.textContent.trim() === "Vault Flow");';
+    const selectPlugin = 'const items = Array.from(doc.querySelectorAll(".vertical-tab-nav-item")).filter(el => el.textContent.trim() === "Vault Flow"); if (items.length !== 1) throw new Error("Expected one Vault Flow settings entry"); items[0].click(); return true;';
+    const rendered = 'const content = doc.querySelector(".vertical-tab-content"); return !!content && content.textContent.includes("Automation") && content.textContent.includes("Rules");';
+    const windowPrefix = JSON.stringify(`Settings - ${basename(root)} - Obsidian `);
+    await waitFor(`return (() => { ${navigation} })() || require('@electron/remote').BrowserWindow.getAllWindows().some(window => window.getTitle().startsWith(${windowPrefix}));`, "native settings entry point");
+    if (evaluate(navigation)) {
+      evaluate(selectPlugin);
+      await waitFor(rendered, "declarative plugin settings");
+      command(["dev:screenshot", `path=${join(root, ".vault-flow-smoke-settings.png")}`]);
+      closeTopModal();
+    } else {
+      if (!profile) throw new Error("Native Settings is a separate window. Pass --profile with its canonical isolated profile and launch that test instance with loopback remote debugging.");
+      const settings = await connectNativeSettings({ root, profile, deadlineAt: startedAt + deadlineMs });
+      try {
+        await waitForRead(() => settings.evaluate(navigation), "native settings navigation");
+        await settings.evaluate(selectPlugin);
+        await waitForRead(() => settings.evaluate(rendered), "declarative plugin settings");
+        await writeFile(join(root, ".vault-flow-smoke-settings.png"), Buffer.from(await settings.screenshot(), "base64"), { flag: "wx" });
+        await settings.closeWindow();
+      } finally { settings.disconnect(); }
+    }
+    await focusFixtureWindow();
     report.checks.push("native settings entry point and declarative page rendering");
     const errors = command(["dev:errors"]);
     if (errors && !/^no (?:captured )?(?:javascript )?errors\b/iu.test(errors)) throw new Error(`Captured application errors require review: ${errors}`);
@@ -325,7 +353,7 @@ async function run(config) {
 try {
   const config = options(process.argv.slice(2));
   if (config["--help"]) {
-    console.log("Prepare only: node scripts/obsidian-smoke.mjs --prepare [--parent /canonical/temp/parent]\nRuntime (explicit opt-in): node scripts/obsidian-smoke.mjs --run --root /generated/root --vault VAULT_ID --cli /absolute/official/obsidian --allow-runtime\nNo automatic launch, registration, activation, integration, deployment, or cleanup occurs during --prepare. --run may launch Obsidian and changes only the verified synthetic vault. Open/trust that vault manually first. Fixture/report files are retained for inspection.");
+    console.log("Prepare only: node scripts/obsidian-smoke.mjs --prepare [--parent /canonical/temp/parent]\nRuntime (explicit opt-in): node scripts/obsidian-smoke.mjs --run --root /generated/root --vault VAULT_ID --cli /absolute/official/obsidian --profile /canonical/isolated/profile --allow-runtime\nNative Settings windows require --profile and a test instance launched with --remote-debugging-address=127.0.0.1 --remote-debugging-port=0. Every eval then checks both profile and vault.\nNo automatic launch, registration, activation, integration, deployment, or cleanup occurs during --prepare. --run may launch Obsidian and changes only the verified synthetic vault. Open/trust that vault manually first. Fixture/report files are retained for inspection.");
   } else if (config["--prepare"] && !config["--run"]) await prepare(config["--parent"]);
   else if (config["--run"] && !config["--prepare"]) await run(config);
   else throw new Error("Choose exactly one of --prepare or --run. Use --help for the scope and prerequisites.");
