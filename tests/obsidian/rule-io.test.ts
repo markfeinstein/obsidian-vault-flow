@@ -21,7 +21,7 @@ describe("rule import/export", () => {
   it("exports a versioned envelope with plugin version", () => {
     const exported = JSON.parse(formatRuleExport([minimalRule()], pluginVersion)) as Record<string, unknown>;
 
-    expect(exported.schemaVersion).toBe(2);
+    expect(exported.schemaVersion).toBe(3);
     expect(exported.pluginVersion).toBe(pluginVersion);
     expect(exported.rules).toEqual([minimalRule()]);
   });
@@ -34,7 +34,7 @@ describe("rule import/export", () => {
       return;
     }
     expect(result.rules).toEqual([minimalRule()]);
-    expect(result.details.schemaVersion).toBe(2);
+    expect(result.details.schemaVersion).toBe(3);
     expect(result.details.pluginVersion).toBe(pluginVersion);
   });
 
@@ -61,13 +61,13 @@ describe("rule import/export", () => {
   });
 
   it("rejects future schema versions", () => {
-    const result = parseRuleImport(JSON.stringify({ schemaVersion: 3, rules: [minimalRule()] }));
+    const result = parseRuleImport(JSON.stringify({ schemaVersion: 4, rules: [minimalRule()] }));
 
     expect(result.status).toBe("error");
     if (result.status !== "error") {
       return;
     }
-    expect(result.error).toBe("Rule import uses unsupported schemaVersion 3; this plugin supports schemaVersion 2.");
+    expect(result.error).toBe("Rule import uses unsupported schemaVersion 4; this plugin supports schemaVersion 3.");
   });
 
   it("rejects invalid schema versions", () => {

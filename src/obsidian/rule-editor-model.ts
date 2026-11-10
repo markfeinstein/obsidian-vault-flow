@@ -1,4 +1,5 @@
 import { compileRuleRegex } from "../engine/rule-regex";
+import type { RuleFixture } from "../engine/rule-fixtures";
 import type { FrontmatterValue, Rule, RuleActionSet, RulePredicate, RuleRunOn } from "../engine";
 
 export type EditablePredicateType =
@@ -81,6 +82,7 @@ export type VisualConditionNode =
   | { readonly kind: "group"; readonly group: VisualConditionGroup };
 
 export interface VisualRuleDraft {
+  readonly fixtures?: readonly RuleFixture[];
   readonly name: string;
   readonly enabled: boolean;
   readonly priority: string;
@@ -417,6 +419,7 @@ export function draftFromRule(rule: Rule): VisualRuleDraft | null {
     criteriaMode,
     conditionNodes: nodesResult,
     stopOnMatch: rule.stopOnMatch ?? false,
+    fixtures: rule.fixtures,
     dryRun: rule.dryRun ?? false,
     runOn: rule.runOn ?? "always",
     predicateType: firstCriterion.predicateType,
@@ -587,6 +590,7 @@ function ruleFromDraft(rules: readonly Rule[], draft: VisualRuleDraft, existingI
       order,
       when: predicate,
       then: actionSet,
+      ...(draft.fixtures === undefined ? {} : { fixtures: draft.fixtures }),
       ...(draft.stopOnMatch ? { stopOnMatch: true } : {}),
       ...(draft.dryRun ? { dryRun: true } : {}),
       ...(draft.runOn !== "always" ? { runOn: draft.runOn } : {}),

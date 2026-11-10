@@ -32,6 +32,8 @@ import {
 import { formatRuleExport, formatRuleImportReport, MAX_RULE_IMPORT_TEXT_LENGTH, parseRuleImport, type RuleImportDetails } from "./rule-io";
 import { sanitizeRules, type CollisionPolicy, type VaultFlowSettings } from "./settings";
 import { mergeRuleEdit } from "./rule-edits";
+import { readRuleFixtures, runRuleFixtures } from "../engine/rule-fixtures";
+import { formatSemanticChanges, semanticRuleChanges } from "./rule-semantic-diff";
 
 export interface VaultFlowSettingsHost {
   getSettings(): VaultFlowSettings;
@@ -585,6 +587,7 @@ function orderedRulesForDisplay(rules: readonly Rule[]): Rule[] {
 class RuleEditorModal extends Modal {
   private draft: MutableRuleDraft;
   private rawRuleText: string | null;
+  private fixturesText: string;
 
   public constructor(
     app: App,
@@ -595,6 +598,7 @@ class RuleEditorModal extends Modal {
     super(app);
     const visualDraft = existingRule === null ? createDefaultRuleDraft(allRules) : draftFromRule(existingRule);
     this.rawRuleText = existingRule !== null && visualDraft === null ? JSON.stringify(existingRule, null, 2) : null;
+    this.fixturesText = JSON.stringify(existingRule?.fixtures ?? [], null, 2);
     const base = visualDraft ?? createDefaultRuleDraft(allRules);
     const firstCriterion = base.criteria?.[0] ?? criterionFromBase(base);
 
@@ -834,6 +838,18 @@ class RuleEditorModal extends Modal {
           .onChange((value) => { d.deletePropertiesList = value; });
       });
 
+    new Setting(this.contentEl)
+      .setName("Synthetic rule fixtures (JSON)")
+      .setDesc("Up to 20 deterministic examples. Stored/exported with the rule; use synthetic content, not sensitive real notes. No vault writes.")
+      .addTextArea((text) => { text.setValue(this.fixturesText).onChange((value) => { this.fixturesText = value; }); text.inputEl.rows = 6; })
+      .addButton((button) => button.setButtonText("Run rule fixtures").onClick(() => {
+        const result = this.visualResult();
+        if (result.status === "error") { new Notice(result.error); return; }
+        const candidate = this.candidateFromResult(result);
+        const results = candidate === undefined ? [] : runRuleFixtures(candidate);
+        new Notice(results.length === 0 ? "No fixtures configured." : results.map((test) => `${test.passed ? "PASS" : "FAIL"} ${test.name}${test.failures.length === 0 ? "" : ": " + test.failures.join("; ")}`).join("\n"), 15_000);
+      }));
+
     // --- Save / Cancel ---
     new Setting(this.contentEl)
       .addButton((btn) => {
@@ -841,20 +857,15 @@ class RuleEditorModal extends Modal {
           .setButtonText("Save")
           .setCta()
           .onClick(async () => {
-            const visualDraft = buildVisualDraft(this.draft);
-            const result = this.existingRule !== null
-              ? updateRuleById(this.allRules, this.existingRule.id, visualDraft)
-              : createRuleFromDraft(this.allRules, visualDraft);
+            const result = this.visualResult();
 
             if (result.status === "error") {
               new Notice(`Vault Flow: ${result.error}`);
               return;
             }
 
-            const candidate = result.rules.find((rule) => this.existingRule === null
-              ? !this.allRules.some((existing) => existing.id === rule.id) : rule.id === this.existingRule.id);
-            const warnings = candidate === undefined ? [] : ruleConvergenceWarnings(candidate);
-            if (warnings.length > 0 && !(await confirmAction(this.app, "Review rule repetition warnings", warnings.join("\n\n"), "Save rule anyway"))) return;
+            const candidate = this.candidateFromResult(result);
+            if (candidate === undefined || !(await this.reviewCandidate(candidate))) return;
             if (await this.onSave(result) !== false) this.close();
           });
       })
@@ -863,6 +874,28 @@ class RuleEditorModal extends Modal {
           .setButtonText("Cancel")
           .onClick(() => { this.close(); });
       });
+  }
+
+  private visualResult(): RuleEditResult {
+    let parsed: unknown;
+    try { parsed = JSON.parse(this.fixturesText.trim() || "[]"); }
+    catch { return { status: "error", error: "Fixture JSON is invalid." }; }
+    const fixtures = readRuleFixtures(parsed);
+    if (fixtures === null) return { status: "error", error: "Fixtures must be valid synthetic examples (at most 20 and 200 KB total)." };
+    const draft = { ...buildVisualDraft(this.draft), ...(fixtures.length === 0 && this.existingRule?.fixtures === undefined ? {} : { fixtures }) };
+    return this.existingRule === null ? createRuleFromDraft(this.allRules, draft) : updateRuleById(this.allRules, this.existingRule.id, draft);
+  }
+
+  private candidateFromResult(result: RuleEditResult): Rule | undefined {
+    return result.status === "error" ? undefined : result.rules.find((rule) => this.existingRule === null
+      ? !this.allRules.some((existing) => existing.id === rule.id) : rule.id === this.existingRule.id);
+  }
+
+  private async reviewCandidate(candidate: Rule): Promise<boolean> {
+    const warnings = [...ruleConvergenceWarnings(candidate), ...runRuleFixtures(candidate).filter((test) => !test.passed).map((test) => `Fixture failed: ${test.name}: ${test.failures.join("; ")}`)];
+    const changes = semanticRuleChanges(this.existingRule, candidate);
+    if (warnings.length === 0 && changes.length === 0) return true;
+    return confirmAction(this.app, "Review rule semantics before saving", [formatSemanticChanges(changes), ...warnings].filter(Boolean).join("\n\n"), warnings.length > 0 ? "Save despite warnings" : "Save rule");
   }
 
   private renderRawRuleEditor(): void {
@@ -900,8 +933,7 @@ class RuleEditorModal extends Modal {
             }
 
             const replacement = { ...parsedRule, id: this.existingRule.id };
-            const warnings = ruleConvergenceWarnings(replacement);
-            if (warnings.length > 0 && !(await confirmAction(this.app, "Review rule repetition warnings", warnings.join("\n\n"), "Save rule anyway"))) return;
+            if (!(await this.reviewCandidate(replacement))) return;
             if (await this.onSave({
               status: "ok",
               rules: this.allRules.map((rule) => rule.id === this.existingRule?.id ? replacement : rule),

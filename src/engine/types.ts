@@ -32,6 +32,8 @@ export interface NoteState {
   readonly bodyFingerprint?: string;
 }
 
+import type { RuleFixture } from "./rule-fixtures";
+
 export type RuleId = string;
 
 export type RuleRunOn = "always" | "live" | "sweep" | "manual";
@@ -42,6 +44,7 @@ export interface Rule {
   readonly enabled: boolean;
   readonly priority: number;
   readonly order: number;
+  readonly fixtures?: readonly RuleFixture[];
   readonly when: RulePredicate;
   readonly then: RuleActionSet;
   /** When true, stop evaluating further rules once this rule fires. Default: false. */
