@@ -1,9 +1,10 @@
 import { ConfirmationModal, Modal, Notice, type App, type TFile } from "obsidian";
 import type { NoteState, ReconciliationConverged } from "../engine";
 import { applyReconciliationResult, noteStateFromObsidian, resolveMoveCollision } from "./adapter";
-import { createTransactionId, type ReconciliationDecision } from "./diagnostics";
+import { createTransactionId, type ReconciliationDecision, type WorkIssueKind } from "./diagnostics";
 import type { DryRunPreviewPlan } from "./dry-run-preview";
-import { sameNoteStateBaseline, withNoteStatePath } from "./note-state";
+import { sameNoteStateBaseline } from "./note-state";
+import { reserveBatchDestinations } from "./batch-destinations";
 import { markdownBodyContent } from "./planner";
 import { renderFrontmatterDiff } from "./frontmatter-diff";
 import type { CollisionPolicy } from "./settings";
@@ -33,6 +34,7 @@ export interface VaultPreviewApplyCallbacks {
   readonly maxBatchWrites?: () => number;
   readonly onMutationStarted?: Parameters<typeof applyReconciliationResult>[5];
   readonly onMutationFinished?: Parameters<typeof applyReconciliationResult>[6];
+  readonly onMutationFailed?: () => void;
   readonly recordBatch?: (receipt: BatchReceipt) => void | Promise<void>;
 }
 
@@ -41,6 +43,7 @@ const PREVIEW_PAGE_SIZE = 100;
 export class VaultPreviewModal extends Modal {
   private readonly pending: readonly VaultPreviewEntry[];
   private readonly selected = new Set<VaultPreviewEntry>();
+  private reviewedReservations: ReadonlyMap<VaultPreviewEntry, VaultPreviewEntry> | null = null;
   private currentPage = 0;
   private filter: PreviewFilter = { query: "", outcome: "", ruleId: "", groupBy: "none" };
   private applying = false;
@@ -77,7 +80,7 @@ export class VaultPreviewModal extends Modal {
     this.contentEl.empty();
   }
 
-  private render(focusQueryAt?: number): void {
+  private render(focusQueryAt?: number, focusSelectionPath?: string): void {
     this.contentEl.empty();
 
     if (this.pending.length === 0) {
@@ -85,6 +88,9 @@ export class VaultPreviewModal extends Modal {
       return;
     }
 
+    const reservations = this.reviewedReservations ?? reserveBatchDestinations(this.app, this.pending.filter((entry) => this.selected.has(entry)), this.collisionPolicy());
+    const displayed = this.pending.map((entry) => reservations.get(entry) ?? entry);
+    const originalEntries = new Map(displayed.map((entry, index) => [entry, this.pending[index]]));
     const controls = this.contentEl.createDiv({ cls: "vf-preview-controls" });
     const search = controls.createEl("input", { type: "search", attr: { placeholder: "Filter source or destination path", "aria-label": "Filter preview paths" } });
     search.value = this.filter.query;
@@ -97,10 +103,10 @@ export class VaultPreviewModal extends Modal {
       select.value = selected; select.disabled = this.applying;
       select.addEventListener("change", () => { update(select.value); this.currentPage = 0; this.render(); });
     };
-    addFilter("All statuses", ["", ...new Set(this.pending.map((entry) => entry.preview.preview.outcome))], this.filter.outcome, (outcome) => { this.filter = { ...this.filter, outcome }; });
+    addFilter("All statuses", ["", ...new Set(displayed.map((entry) => entry.preview.preview.outcome))], this.filter.outcome, (outcome) => { this.filter = { ...this.filter, outcome }; });
     addFilter("All rules", ["", ...new Set(this.pending.flatMap(previewRuleIds))], this.filter.ruleId, (ruleId) => { this.filter = { ...this.filter, ruleId }; });
     addFilter("Grouping", ["none", "folder", "rule"], this.filter.groupBy, (value) => { this.filter = { ...this.filter, groupBy: value === "folder" || value === "rule" ? value : "none" }; });
-    const visible = filterPreviewEntries(this.pending, this.filter);
+    const visible = filterPreviewEntries(displayed, this.filter).map((entry) => originalEntries.get(entry) ?? entry);
     const visibleSet = new Set(visible);
     const pageCount = Math.max(1, Math.ceil(visible.length / PREVIEW_PAGE_SIZE));
     this.currentPage = Math.min(this.currentPage, pageCount - 1);
@@ -117,10 +123,11 @@ export class VaultPreviewModal extends Modal {
     selectionButton("Select filtered (batch limit)", () => { selectEntries(visible); });
     selectionButton("Deselect filtered", () => { for (const entry of visible) this.selected.delete(entry); });
     selectionButton("Clear selection", () => { this.selected.clear(); });
+    selectionButton("Refresh destinations", () => {});
     const copy = controls.createEl("button", { text: "Copy selected plan summary" });
     copy.disabled = this.applying || this.selected.size === 0;
     copy.onclick = async () => {
-      try { await navigator.clipboard.writeText(exportPreviewSummary(this.pending.filter((entry) => this.selected.has(entry)))); new Notice("Copied paths, rule IDs and property names; no bodies or property values."); }
+      try { await navigator.clipboard.writeText(exportPreviewSummary(this.pending.filter((entry) => this.selected.has(entry)).map((entry) => reservations.get(entry) ?? entry))); new Notice("Copied paths, rule IDs and property names; no bodies or property values."); }
       catch { new Notice("Vault Flow could not copy the plan summary."); }
     };
     const pagination = this.contentEl.createDiv({ cls: "vf-preview-pagination" });
@@ -145,7 +152,9 @@ export class VaultPreviewModal extends Modal {
       const outside = [...this.selected].filter((entry) => !visibleSet.has(entry)).length;
       summary.setText(`${this.selected.size} selected of ${this.pending.length} pending changes (all pages); ${visible.length} match filters${outside ? `; ${outside} selected outside filters` : ""}`);
       copy.disabled = this.applying || this.selected.size === 0;
-      applyBtn.disabled = this.applying || this.selected.size === 0;
+      const blocked = [...reservations.values()].filter((entry) => !isApplyableEntry(entry)).length;
+      if (blocked > 0) summary.setText(`${summary.textContent ?? ""}; ${blocked} selected destination conflict(s): deselect them or change collision policy`);
+      applyBtn.disabled = this.applying || this.selected.size === 0 || blocked > 0;
     };
     updateSelection();
     this.progressEl = footer.createSpan({ attr: { role: "status", "aria-live": "polite" } });
@@ -169,7 +178,8 @@ export class VaultPreviewModal extends Modal {
 
     const tbody = table.createEl("tbody");
     let lastGroup: string | null = null;
-    for (const entry of pageEntries) {
+    for (const originalEntry of pageEntries) {
+      const entry = reservations.get(originalEntry) ?? originalEntry;
       const group = previewGroup(entry, this.filter.groupBy);
       if (this.filter.groupBy !== "none" && group !== lastGroup) tbody.createEl("tr").createEl("th", { text: group, attr: { colspan: "5", scope: "rowgroup" } });
       lastGroup = group;
@@ -180,12 +190,13 @@ export class VaultPreviewModal extends Modal {
         type: "checkbox",
         attr: { "aria-label": `Apply planned change for ${entry.path}` },
       });
-      checkbox.checked = this.selected.has(entry);
-      checkbox.disabled = this.applying || !isApplyableEntry(entry);
+      checkbox.checked = this.selected.has(originalEntry);
+      checkbox.disabled = this.applying || !isApplyableEntry(originalEntry);
+      if (focusSelectionPath === originalEntry.path) checkbox.focus?.();
       checkbox.addEventListener("change", () => {
-        if (checkbox.checked) this.selected.add(entry);
-        else this.selected.delete(entry);
-        updateSelection();
+        if (checkbox.checked) this.selected.add(originalEntry);
+        else this.selected.delete(originalEntry);
+        this.render(undefined, originalEntry.path);
       });
 
       tr.createEl("td", { text: entry.preview.preview.outcome, cls: "vf-preview-cell vf-preview-status" });
@@ -214,7 +225,9 @@ export class VaultPreviewModal extends Modal {
 
     applyBtn.onclick = async () => {
       if (this.applying || this.selected.size === 0) return;
-      const selectedEntries = this.pending.filter((entry) => this.selected.has(entry));
+      const selectedEntries = this.pending.filter((entry) => this.selected.has(entry)).map((entry) => reservations.get(entry) ?? entry);
+      if (selectedEntries.some((entry) => !isApplyableEntry(entry))) return;
+      this.reviewedReservations = reservations;
       this.applying = true;
       this.cancelRequested = false;
       this.render();
@@ -228,6 +241,7 @@ export class VaultPreviewModal extends Modal {
         new Notice(`Vault Flow preview apply failed: ${formatError(error)}`);
       } finally {
         this.applying = false;
+        this.reviewedReservations = null;
         if (!finished && !this.closed) this.render();
       }
     };
@@ -264,7 +278,8 @@ export class VaultPreviewModal extends Modal {
         } catch (error) {
           if (error instanceof ApplyCancelledError) break;
           outcome = "failed";
-          stopped = error instanceof WriteSafetyError || error instanceof ApplyStoppedError;
+          stopped = error instanceof WriteSafetyError || error instanceof ApplyStoppedError || this.entryStarted;
+          if (this.entryStarted) this.callbacks.onMutationFailed?.();
           await this.recordError(entry, `Preview apply failed: ${formatError(error)}`);
         }
         if (outcome === "applied") applied += 1;
@@ -314,7 +329,7 @@ export class VaultPreviewModal extends Modal {
 
     const currentState = await currentStateForPreviewApply(this.app, file, entry.preview.current, entry.preview.needsBodyContent);
     if (currentState.status === "failed") {
-      await this.recordError(entry, `Preview content read failed: ${currentState.message}`);
+      await this.recordError(entry, `Preview content read failed: ${currentState.message}`, "read");
       return "failed";
     }
 
@@ -326,13 +341,15 @@ export class VaultPreviewModal extends Modal {
 
     const pathResolution = this.resolveCurrentPathCollision(file, entry, current);
     if (pathResolution.status === "skipped") {
-      await this.recordSkipped(entry, pathResolution.message);
+      await this.recordSkipped(entry, pathResolution.message, "collision");
       return "skipped";
     }
 
     this.assertCanStart();
     const transaction = await applyReconciliationResult(this.app, file, current, pathResolution.result, () => {
       this.assertCanStart();
+      const destination = this.resolveCurrentPathCollision(file, entry, current);
+      if (destination.status === "skipped") throw new Error(destination.message);
       const baseline = { ...noteStateFromObsidian(file, this.app.metadataCache.getFileCache(file), { bodyContent: current.bodyContent }), bodyFingerprint: current.bodyFingerprint };
       if (!sameNoteStateBaseline(current, baseline)) {
         throw new Error("The note changed during transaction preparation. Generate a new preview.");
@@ -378,12 +395,13 @@ export class VaultPreviewModal extends Modal {
     });
   }
 
-  private async recordSkipped(entry: VaultPreviewEntry, message: string): Promise<void> {
+  private async recordSkipped(entry: VaultPreviewEntry, message: string, issueKind: WorkIssueKind = "stale"): Promise<void> {
     this.lastRow = { message };
     await this.recordDecision({
       timestamp: this.now(),
       path: entry.preview.current.path,
       outcome: "skipped",
+      issueKind,
       appliedRuleIds: entry.preview.result?.appliedRuleIds ?? entry.preview.preview.appliedRuleIds,
       involvedRuleIds: [],
       mutationKinds: entry.preview.preview.mutationKinds,
@@ -393,12 +411,13 @@ export class VaultPreviewModal extends Modal {
     });
   }
 
-  private async recordError(entry: VaultPreviewEntry, message: string): Promise<void> {
+  private async recordError(entry: VaultPreviewEntry, message: string, issueKind: WorkIssueKind = this.entryStarted ? "mutation" : "planning"): Promise<void> {
     this.lastRow = { message };
     await this.recordDecision({
       timestamp: this.now(),
       path: entry.preview.current.path,
       outcome: "error",
+      issueKind,
       appliedRuleIds: entry.preview.result?.appliedRuleIds ?? entry.preview.preview.appliedRuleIds,
       involvedRuleIds: [],
       mutationKinds: entry.preview.preview.mutationKinds,
@@ -438,22 +457,14 @@ export class VaultPreviewModal extends Modal {
     const resolution = resolveMoveCollision(
       this.app,
       file,
-      entry.preview.collisionBasePath ?? result.desired.path,
-      this.collisionPolicy(),
+      result.desired.path,
+      "skip",
     );
     if (resolution.status === "skipped") {
-      return { status: "skipped", message: resolution.message };
+      return { status: "skipped", message: `The reviewed destination is no longer available: ${result.desired.path}. Generate a new preview; no new suffix was chosen.` };
     }
 
-    return {
-      status: "ready",
-      result: resolution.path === result.desired.path
-        ? result
-        : {
-          ...result,
-          desired: withNoteStatePath(result.desired, resolution.path),
-        },
-    };
+    return { status: "ready", result };
   }
 
   private collisionPolicy(): CollisionPolicy {

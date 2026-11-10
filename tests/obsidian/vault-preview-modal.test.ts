@@ -228,6 +228,21 @@ describe("VaultPreviewModal rendering", () => {
 });
 
 describe("VaultPreviewModal applySelected", () => {
+  it("stops a batch and routes to recovery after an uncertain mutation failure", async () => {
+    const file = makeFile("Inbox/note.md");
+    const decisions: ReconciliationDecision[] = [];
+    const onMutationFailed = vi.fn();
+    const app = makeApp(file, { frontmatter: { status: "todo" } }, async (_file, mutate) => { mutate({ status: "todo" }); throw new Error("Storage failure after the mutation boundary"); });
+    Object.assign(app.vault, { read: async () => "" });
+    const modal = new VaultPreviewModal(app, [], { collisionPolicy: () => "skip", onMutationStarted: () => {}, onMutationFailed,
+      recordDecision: async (decision) => { decisions.push(decision); } });
+    await (modal as unknown as VaultPreviewApplyHarness).applySelected([makeEntryForPath(file.path), makeEntryForPath("Inbox/second.md")]);
+    expect(decisions[0]?.message).toContain("Storage failure after the mutation boundary");
+    expect(onMutationFailed).toHaveBeenCalledOnce();
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]).toMatchObject({ outcome: "error", issueKind: "mutation" });
+  });
+
   it("skips stale preview rows without overwriting newer frontmatter", async () => {
     const file = makeFile("Inbox/note.md");
     const previewCurrent = makeState();
@@ -362,7 +377,7 @@ describe("VaultPreviewModal applySelected", () => {
     expect(decisions[0]?.message).toContain("changed since the preview was generated");
   });
 
-  it("re-resolves preview path collisions at apply time", async () => {
+  it("skips a newly occupied reviewed destination instead of choosing an unreviewed suffix", async () => {
     const file = makeFile("Inbox/note.md");
     const previewCurrent = makeState();
     const result = makeResult(
@@ -381,11 +396,12 @@ describe("VaultPreviewModal applySelected", () => {
 
     await modal.applySelected([makeEntry(previewCurrent, result)]);
 
-    expect(renameFile).toHaveBeenCalledWith(file, "Done/note 1.md");
-    expect(decisions).toMatchObject([{ outcome: "changed", desiredPath: "Done/note 1.md" }]);
+    expect(renameFile).not.toHaveBeenCalled();
+    expect(decisions).toMatchObject([{ outcome: "skipped", desiredPath: "Done/note.md" }]);
+    expect(decisions[0]?.message).toContain("no new suffix was chosen");
   });
 
-  it("resolves a changed suffix from the original collision target", async () => {
+  it("preserves the reviewed suffix even when its original collision target was recorded", async () => {
     const file = makeFile("Inbox/note.md");
     const previewCurrent = makeState();
     const result = makeResult(
@@ -407,7 +423,7 @@ describe("VaultPreviewModal applySelected", () => {
 
     await modal.applySelected([makeEntry(previewCurrent, result, false, "Done/note.md")]);
 
-    expect(renameFile).toHaveBeenCalledWith(file, "Done/note 2.md");
+    expect(renameFile).not.toHaveBeenCalled();
   });
 
   it("does not treat tag-order-only changes as stale", async () => {

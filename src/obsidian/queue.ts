@@ -63,6 +63,7 @@ export class ReconciliationQueue {
   private readonly readyPaths = new Set<string>();
   private readonly runningPaths = new Set<string>();
   private readonly mutationStartedPaths = new Set<string>();
+  private readonly evaluations = new Map<string, QueueEvaluationContext>();
   private readonly cancellationVersions = new Map<string, number>();
   private readonly expectedRenamePaths = new Map<string, number>();
   private readonly contentReadFailures = new Map<string, number>();
@@ -222,6 +223,7 @@ export class ReconciliationQueue {
 
     const context: QueueEvaluationContext = { path, triggerContexts: entry.triggerContexts,
       revision: this.getOptions().revision ?? 0, evaluatedAt: this.now() };
+    this.evaluations.set(path, context);
     try {
       const completion = await this.reconcile(path, entry.file, entry.triggerContexts, generation, cancellationVersion);
       if (completion === "reconciled") this.contentReadFailures.delete(path);
@@ -242,10 +244,13 @@ export class ReconciliationQueue {
           mutationKinds: [],
           iterations: 0,
           message,
+          issueKind: this.mutationStartedPaths.has(path) ? "mutation" : "planning",
+          triggerContexts: entry.triggerContexts,
         });
         new Notice(`Vault Flow failed to reconcile ${entry.file.path}: ${message}`);
       }
     } finally {
+      this.evaluations.delete(path);
       this.mutationStartedPaths.delete(path);
       this.runningPaths.delete(path);
       this.notifySnapshotChanged();
@@ -339,6 +344,7 @@ export class ReconciliationQueue {
         timestamp: this.now(),
         path,
         outcome: retryLimitReached ? "error" : "skipped",
+        issueKind: plan.status === "metadata-unavailable" ? "metadata" : "read",
         appliedRuleIds: [],
         involvedRuleIds: [],
         mutationKinds: [],
@@ -480,6 +486,7 @@ export class ReconciliationQueue {
         mutationKinds,
         iterations: result.iterations,
         desiredPath: result.desired.path,
+        issueKind: "active",
         message: "Live write deferred because the note is currently active. Try again after switching notes or saving changes.",
       });
       this.defer(path, file, triggerContexts);
@@ -595,6 +602,7 @@ export class ReconciliationQueue {
         timestamp: this.now(),
         path: current.path,
         outcome: retryLimitReached ? "error" : "skipped",
+        issueKind: "read",
         appliedRuleIds: result.appliedRuleIds,
         involvedRuleIds: [],
         mutationKinds,
@@ -621,6 +629,7 @@ export class ReconciliationQueue {
         mutationKinds,
         iterations: result.iterations,
         desiredPath: result.desired.path,
+        issueKind: "stale",
         message: "Write skipped because the note changed after reconciliation was planned; it was requeued.",
       });
       this.requeue(path, file, triggerContexts);
@@ -725,6 +734,7 @@ export class ReconciliationQueue {
         iterations: result.iterations,
         desiredPath: resolution.path,
         message: resolution.message,
+        issueKind: "collision",
       });
       return null;
     }
@@ -743,7 +753,12 @@ export class ReconciliationQueue {
   }
 
   private async recordDecision(decision: ReconciliationDecision): Promise<void> {
-    await this.callbacks.recordDecision?.(decision);
+    const context = this.evaluations.get(normalizePath(decision.path));
+    const issueKind = decision.issueKind ?? (["error", "cycle-detected", "max-iterations-exceeded"].includes(decision.outcome) ? "planning" : undefined);
+    await this.callbacks.recordDecision?.({ ...decision,
+      ...(context === undefined ? {} : { triggerContexts: context.triggerContexts }),
+      ...(issueKind === undefined ? {} : { issueKind }),
+    });
   }
 
   private notifySnapshotChanged(): void {

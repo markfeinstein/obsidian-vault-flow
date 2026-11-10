@@ -66,15 +66,16 @@ export function noteStateFromObsidian(
 
 export function resolveMoveCollision(
   app: App,
-  file: TFile,
+  file: Pick<TFile, "path">,
   desiredPath: string,
   policy: CollisionPolicy,
+  isReserved: (path: string) => boolean = () => false,
 ): MoveCollisionResolution {
   const currentPath = normalizePath(file.path);
   const normalizedDesiredPath = normalizePath(desiredPath);
   const existing = app.vault.getAbstractFileByPath(normalizedDesiredPath);
 
-  if (existing === null || normalizePath(existing.path) === currentPath) {
+  if (!isReserved(normalizedDesiredPath) && (existing === null || normalizePath(existing.path) === currentPath)) {
     return { status: "ready", path: normalizedDesiredPath, collided: false };
   }
 
@@ -88,7 +89,7 @@ export function resolveMoveCollision(
 
   return {
     status: "ready",
-    path: findAvailableSiblingPath(app, currentPath, normalizedDesiredPath),
+    path: findAvailableSiblingPath(app, currentPath, normalizedDesiredPath, isReserved),
     collided: true,
   };
 }
@@ -496,12 +497,12 @@ function parentFolderPath(path: string): string {
   return separatorIndex === -1 ? "" : normalized.slice(0, separatorIndex);
 }
 
-function findAvailableSiblingPath(app: App, currentPath: string, desiredPath: string): string {
+function findAvailableSiblingPath(app: App, currentPath: string, desiredPath: string, isReserved: (path: string) => boolean): string {
   const parsed = parseVaultPath(desiredPath);
   for (let suffix = 1; suffix <= MAX_COLLISION_SUFFIX_ATTEMPTS; suffix += 1) {
     const candidatePath = normalizePath(`${parsed.folderPrefix}${parsed.basename} ${suffix}${parsed.extensionWithDot}`);
     const existing = app.vault.getAbstractFileByPath(candidatePath);
-    if (existing === null || normalizePath(existing.path) === currentPath) {
+    if (!isReserved(candidatePath) && (existing === null || normalizePath(existing.path) === currentPath)) {
       return candidatePath;
     }
   }

@@ -153,12 +153,21 @@ Strict RE2 syntax remains the default: lookarounds and backreferences are reject
 - Planning and writing recheck the file path, metadata, body content when needed, settings revision, and destination collision state.
 - Mutations are serialized. If a property write fails after a rename, Vault Flow attempts to move the note back.
 - A device-local pause stops new writes. The default circuit breaker allows 100 transaction starts per rolling minute and 100 selected rows per reviewed batch.
-- Collision handling can skip the note or choose an available numeric suffix.
+- Collision handling can skip the note or choose an available numeric suffix. Apply previews reserve exact destinations and planned parent folders across the selected batch before confirmation and show the reserved names. A row beneath a file or an earlier reserved file is blocked. If a reviewed destination becomes occupied, that row is skipped instead of silently choosing a different suffix.
 - Closing an apply preview cancels rows that have not started. A transaction already writing is allowed to finish or roll back.
 
 Undo records are kept separately from diagnostics. Vault Flow retains up to 100 transactions for seven days, capped at 1 MiB. Before undoing, it checks the current path, file statistics, SHA-256 content fingerprint, and complete frontmatter after-state. If the note was edited, replaced, moved elsewhere, or deleted, undo is refused.
 
 Runtime history, batch receipts, sweep state, and rule statistics are stored in Obsidian's device-local plugin storage rather than synced settings.
+
+## Failed-work inbox
+
+**Show failed-work inbox** groups unresolved recent work by metadata/read failures, planning problems, collisions, stale previews, active-note deferrals, and pending-write recovery. It shows at most 500 items with 50 rows per page, using recent device-local diagnostics and the recovery journal—not a second durable job queue.
+
+- **Replan and review** reads the current note using the original trigger contexts and opens a fresh apply preview. It never replays an old mutation or bypasses apply confirmation, pause, scope, or stale-plan guards. Legacy diagnostics without trigger information use manual rules.
+- **Inspect recovery** handles unresolved journal entries separately. Acknowledgment never repairs a note or automatically resumes writes.
+- A successful live evaluation does not hide an unresolved sweep-only failure.
+- **Open existing note** refuses a missing path instead of creating a replacement note.
 
 ## Bases
 
@@ -188,6 +197,7 @@ Select the rows you want, open the apply preview, and confirm the batch. Vault F
 - **Show undo history**
 - **Inspect pending-write recovery**
 - **Show apply batch receipts**
+- **Show failed-work inbox**
 - **Export diagnostics to Markdown**
 - **Export settings to clipboard**
 

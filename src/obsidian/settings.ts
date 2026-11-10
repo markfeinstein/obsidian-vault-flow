@@ -4,7 +4,7 @@ import { compilePathGlob } from "../engine/path-glob";
 import { readRuleFixtures } from "../engine/rule-fixtures";
 import { normalizePath } from "obsidian";
 import type { FrontmatterValue, PlannedMutation, Rule, RuleActionSet, RulePredicate, RuleId, RuleRunOn } from "../engine";
-import { cloneDecision, type ReconciliationDecision, type ReconciliationDecisionOutcome } from "./diagnostics";
+import { cloneDecision, isWorkIssueKind, type ReconciliationDecision, type ReconciliationDecisionOutcome } from "./diagnostics";
 import { MIN_SWEEP_INTERVAL_MS } from "./periodic-schedule";
 import type { MtimeMap } from "./sweep";
 import { pruneTransactionHistory } from "./transaction-history";
@@ -596,6 +596,9 @@ function readDecision(value: unknown): ReconciliationDecision | null {
   if (value.message !== undefined && typeof value.message !== "string") {
     return null;
   }
+  if (value.issueKind !== undefined && !isWorkIssueKind(value.issueKind)) return null;
+  if (value.triggerContexts !== undefined && (!isStringArray(value.triggerContexts) || value.triggerContexts.length < 1 || value.triggerContexts.length > 4
+    || value.triggerContexts.some((context) => !["always", "manual", "live", "sweep"].includes(context)))) return null;
   if (value.beforeFrontmatter !== undefined && !isRecord(value.beforeFrontmatter)) {
     return null;
   }
@@ -623,6 +626,8 @@ function readDecision(value: unknown): ReconciliationDecision | null {
     iterations: value.iterations,
     ...(value.desiredPath === undefined ? {} : { desiredPath: value.desiredPath }),
     ...(value.message === undefined ? {} : { message: value.message }),
+    ...(value.issueKind === undefined ? {} : { issueKind: value.issueKind }),
+    ...(value.triggerContexts === undefined ? {} : { triggerContexts: [...value.triggerContexts] as RuleRunOn[] }),
     ...(value.afterIdentity === undefined ? {} : { afterIdentity: { ...(value.afterIdentity as unknown as NoteIdentity) } }),
     ...(value.beforeFrontmatter === undefined ? {} : { beforeFrontmatter: cloneUnknownRecord(value.beforeFrontmatter) }),
     ...(value.afterFrontmatter === undefined ? {} : { afterFrontmatter: cloneUnknownRecord(value.afterFrontmatter) }),
