@@ -17,6 +17,8 @@ export class WriteSafety {
     this.onPause(this.pausedReason);
   }
 
+  public pause(reason: string): void { this.pausedReason = reason; this.onPause(reason); }
+
   public assertCanWrite(): void {
     if (this.paused) throw new WriteSafetyError(`Vault Flow writes are paused: ${this.pausedReason}. Resume explicitly before writing.`);
   }

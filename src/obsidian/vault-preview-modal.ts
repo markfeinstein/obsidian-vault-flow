@@ -31,7 +31,8 @@ export interface VaultPreviewApplyCallbacks {
   readonly assertCanApply?: () => void;
   readonly now?: () => number;
   readonly maxBatchWrites?: () => number;
-  readonly onMutationStarted?: () => void;
+  readonly onMutationStarted?: Parameters<typeof applyReconciliationResult>[5];
+  readonly onMutationFinished?: Parameters<typeof applyReconciliationResult>[6];
   readonly recordBatch?: (receipt: BatchReceipt) => void | Promise<void>;
 }
 
@@ -336,11 +337,11 @@ export class VaultPreviewModal extends Modal {
       if (!sameNoteStateBaseline(current, baseline)) {
         throw new Error("The note changed during transaction preparation. Generate a new preview.");
       }
-    }, () => {
-      this.callbacks.onMutationStarted?.();
+    }, (pending) => {
+      this.callbacks.onMutationStarted?.(pending);
       this.entryStarted = true;
       this.batchStarted = true;
-    });
+    }, (transaction) => this.callbacks.onMutationFinished?.(transaction));
     await this.recordApplied(entry, transaction);
     return "applied";
   }
@@ -358,7 +359,7 @@ export class VaultPreviewModal extends Modal {
     }
 
     const timestamp = this.now();
-    const transactionId = createTransactionId(timestamp, transaction.beforePath);
+    const transactionId = transaction.transactionId ?? createTransactionId(timestamp, transaction.beforePath);
     this.lastRow = { afterPath: transaction.afterPath, transactionId };
     await this.recordDecision({
       timestamp,

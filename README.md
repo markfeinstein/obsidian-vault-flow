@@ -228,6 +228,12 @@ Useful commands:
 
 `package.json` is the version source of truth. Release tags are numeric versions such as `0.1.0` and must match `manifest.json`. The release workflow checks the build and publishes `main.js`, `manifest.json`, and `styles.css`.
 
+## Interrupted-write recovery
+
+Before the first note mutation, Vault Flow synchronously saves a device-local write-ahead snapshot (`vault-flow:pending-writes:v1`). Successful transactions are saved to undo history immediately before their pending record is acknowledged. Startup pauses writes when unresolved or unsupported recovery data is present. Open **Inspect pending-write recovery** to inspect/export before/after properties, restore a verified completed write to history, or acknowledge an entry after manual inspection. These actions never automatically repair or overwrite a note; resume writes explicitly afterwards.
+
+Unknown/interrupted outcomes require manual inspection and independent backups. Only completed writes whose captured identity still matches can be recovered into history. Unresolved entries are not automatically expired or evicted (40 entries / 1 MiB maximum); overlapping writes and storage failures block new writes. Property values are retained locally and included in recovery exports, so store exports securely. Device-local storage is not a cross-device backup or a guarantee against filesystem/power-loss failure.
+
 ## Bulk review and retained undo history
 
 Vault previews support path, status, and rule filters; folder/rule grouping; select-page/select-filtered controls bounded by the batch limit; and explicit deselection. Selection persists across pages and filters, with hidden selections counted before apply. The final confirmation summarizes the scope and duplicate proposed destinations. “Copy selected plan summary” exports paths, rule IDs, and property names, not note bodies or property values.

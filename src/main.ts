@@ -1,13 +1,15 @@
 import { ConfirmationModal, Modal, moment, normalizePath, Notice, Platform, Plugin, ProgressBarComponent, TFile, TFolder, Vault } from "obsidian";
 import type { BasesAllOptions, TAbstractFile } from "obsidian";
-import { isMarkdownFile } from "./obsidian/adapter";
+import { isMarkdownFile, isProcessableFile as isSupportedNote, validateVaultPath, type AppliedReconciliationTransaction } from "./obsidian/adapter";
+import { TransactionJournal, type JournalEntry, type PendingNoteMutation } from "./obsidian/transaction-journal";
+import { RecoveryModal } from "./obsidian/recovery-modal";
 import { mapWithConcurrency } from "./obsidian/concurrency";
 import { compactPreviewPlan } from "./obsidian/preview-snapshot";
 import { unknownValuesEqual } from "./engine/value-utils";
 import { cliError, formatCliDiagnostics, formatCliPlan, formatCliStatus, parseCliTrigger } from "./obsidian/cli";
 import { VAULT_FLOW_BASES_VIEW_TYPE, VaultFlowBasesView } from "./obsidian/bases-view";
 import { DiagnosticLogModal } from "./obsidian/diagnostic-log-modal";
-import type { ReconciliationDecision } from "./obsidian/diagnostics";
+import { createTransactionId, type ReconciliationDecision } from "./obsidian/diagnostics";
 import { RuleDebuggerModal } from "./obsidian/rule-debugger-modal";
 import { planReconciliationForFile } from "./obsidian/dry-run-preview";
 import { UndoHistoryModal } from "./obsidian/undo-history-modal";
@@ -72,6 +74,7 @@ export default class VaultFlowPlugin extends Plugin {
   private trackedMtimesDirty = false;
   private diagnosticsRefreshTimer: number | null = null;
   private runtimeSaveFailed = false;
+  private journal: TransactionJournal | null = null;
 
   override async onload(): Promise<void> {
     this.loaded = true;
@@ -95,6 +98,16 @@ export default class VaultFlowPlugin extends Plugin {
       recentDecisions: pruneDecisions(runtimeResult.runtimeState.recentDecisions.map(diagnosticSummary)),
     };
     this.settingsRevision = 1;
+    this.journal = new TransactionJournal(this.app);
+    if (!this.settingsReadOnly) {
+      const recorded = new Set([...this.transactions, ...this.settings.recentDecisions.filter((decision) => decision.outcome === "undone")].map((decision) => decision.transactionId));
+      try { for (const entry of this.journal.entries()) if (recorded.has(entry.transactionId)) this.journal.acknowledge(entry.transactionId); }
+      catch { new Notice("Vault Flow could not acknowledge already recorded recovery entries."); }
+    }
+    if (this.journal.blockedReason !== null || this.journal.entries().length > 0) {
+      this.writeSafety.pause(this.journal.blockedReason ?? "Pending writes need recovery inspection");
+      new Notice("Vault Flow paused writes. Open “Inspect pending-write recovery” before explicitly resuming.");
+    }
 
     if (this.settingsReadOnly) {
       new Notice(sanitizedSettings.scopeErrors !== undefined
@@ -145,7 +158,8 @@ export default class VaultFlowPlugin extends Plugin {
           }
         },
         runExclusive: async (operation) => this.mutationCoordinator.runExclusive(operation),
-        onMutationStarted: () => this.writeSafety.consume(this.settings.maxWritesPerMinute),
+        onMutationStarted: (pending) => this.startJournal(pending),
+        onMutationFinished: (transaction) => this.finishJournal(transaction),
       },
     );
 
@@ -179,7 +193,8 @@ export default class VaultFlowPlugin extends Plugin {
           recordBatch: (receipt) => this.recordBatch(receipt),
           assertCanApply: () => this.assertAutomationEnabled(),
           maxBatchWrites: () => this.settings.maxBatchWrites,
-          onMutationStarted: () => this.writeSafety.consume(this.settings.maxWritesPerMinute),
+          onMutationStarted: (pending) => this.startJournal(pending),
+          onMutationFinished: (transaction) => this.finishJournal(transaction),
         },
       }),
       options: (config): BasesAllOptions[] => [
@@ -286,6 +301,14 @@ export default class VaultFlowPlugin extends Plugin {
           });
       });
     }));
+
+    this.addCommand({
+      id: "inspect-write-recovery",
+      name: "Inspect pending-write recovery",
+      callback: () => new RecoveryModal(this.app, () => this.journal?.entries() ?? [],
+        async (entry) => this.restoreRecoveredHistory(entry), async (id) => { await this.mutationCoordinator.runExclusive(async () => { this.journal?.acknowledge(id); }); },
+        this.journal?.blockedReason ?? null).open(),
+    });
 
     this.addCommand({
       id: "toggle-automation-pause",
@@ -814,7 +837,8 @@ export default class VaultFlowPlugin extends Plugin {
           recordBatch: (receipt) => this.recordBatch(receipt),
           assertCanApply: () => this.assertAutomationEnabled(settingsRevision),
           maxBatchWrites: () => this.settings.maxBatchWrites,
-          onMutationStarted: () => this.writeSafety.consume(this.settings.maxWritesPerMinute),
+          onMutationStarted: (pending) => this.startJournal(pending),
+          onMutationFinished: (transaction) => this.finishJournal(transaction),
         },
       ).open();
     } catch (error) {
@@ -945,9 +969,50 @@ export default class VaultFlowPlugin extends Plugin {
 
     this.settings = { ...this.settings, recentDecisions, ruleStats };
     this.scheduleRuntimeStateSave();
+    if (this.journal !== null && (decision.outcome === "changed" || decision.outcome === "undone") && decision.transactionId !== undefined) {
+      this.flushRuntimeStateSave();
+      const retained = decision.outcome === "undone" || this.transactions.some((transaction) => transaction.transactionId === decision.transactionId);
+      if (!this.runtimeSaveFailed && retained) {
+        try { this.journal.acknowledge(decision.transactionId); }
+        catch { this.writeSafety.pause("A completed write could not be removed from the recovery journal"); }
+      } else this.writeSafety.pause("Undo history was not retained; inspect the pending-write recovery snapshot");
+    }
     this.scheduleDiagnosticsRefresh();
     this.updateStatusBar();
     return Promise.resolve();
+  }
+
+  private startJournal(pending: PendingNoteMutation): void {
+    this.writeSafety.consume(this.settings.maxWritesPerMinute);
+    try { this.journal?.begin(pending); }
+    catch (error) { this.writeSafety.pause("The write-ahead journal is unavailable; no note write was started"); throw error; }
+  }
+
+  private finishJournal(transaction: AppliedReconciliationTransaction): void {
+    try { this.journal?.complete(transaction); }
+    catch { this.writeSafety.pause("The write completed but its recovery snapshot could not be updated"); }
+  }
+
+  private async restoreRecoveredHistory(entry: JournalEntry): Promise<boolean> {
+    try {
+      return await this.mutationCoordinator.runExclusive(async () => {
+        if (!this.loaded || this.settingsReadOnly) throw new Error("Compatible, loaded settings are required.");
+        const latest = this.journal?.entries().find((candidate) => candidate.transactionId === entry.transactionId);
+        if (latest?.status !== "completed" || latest.transaction?.afterIdentity === undefined) throw new Error("No verified completed write is available. Inspect and export its snapshot instead.");
+        validateVaultPath(this.app, latest.beforePath); validateVaultPath(this.app, latest.afterPath);
+        const file = this.app.vault.getFileByPath(latest.afterPath);
+        if (file === null || !isSupportedNote(file) || !sameNoteIdentity(latest.transaction.afterIdentity, await captureNoteIdentity(this.app, file)) || this.app.vault.getFileByPath(latest.afterPath) !== file) throw new Error("The note was changed or replaced. Inspect it manually; recovery will not overwrite newer work.");
+        const frontmatter = latest.mutationKinds.includes("frontmatter");
+        await this.recordDecision({ timestamp: latest.timestamp, transactionId: latest.transactionId, path: latest.beforePath, desiredPath: latest.afterPath,
+          outcome: latest.operation === "undo" ? "undone" : "changed", appliedRuleIds: latest.ruleIds, involvedRuleIds: [], mutationKinds: latest.mutationKinds,
+          iterations: latest.iterations, afterIdentity: latest.transaction.afterIdentity,
+          ...(frontmatter ? { beforeFrontmatter: latest.beforeFrontmatter, afterFrontmatter: latest.afterFrontmatter } : {}),
+          ...(latest.revertsTransactionId === undefined ? {} : { revertsTransactionId: latest.revertsTransactionId }), message: "Recovered verified completed write from the device-local journal." });
+        if (this.runtimeSaveFailed || this.journal?.entries().some((candidate) => candidate.transactionId === latest.transactionId)) throw new Error("History could not retain this snapshot. Export it before acknowledging it manually.");
+        new Notice("Verified completed write restored to history. No note was modified; writes remain paused.");
+        return true;
+      });
+    } catch (error) { new Notice(`Vault Flow recovery: ${error instanceof Error ? error.message : String(error)}`); return false; }
   }
 
   private recordBatch(receipt: BatchReceipt): void {
@@ -999,9 +1064,10 @@ export default class VaultFlowPlugin extends Plugin {
       const undone = await this.mutationCoordinator.runExclusive(async () => {
         this.assertAutomationEnabled();
         const file = this.app.vault.getFileByPath(currentPath);
-        if (file === null) {
-          throw new Error(`The file could not be found at ${currentPath}.`);
+        if (file === null || !isSupportedNote(file)) {
+          throw new Error(`The Markdown note could not be found at ${currentPath}.`);
         }
+        validateVaultPath(this.app, currentPath); validateVaultPath(this.app, originalPath);
         const currentIdentity = await captureNoteIdentity(this.app, file);
         this.assertAutomationEnabled();
         if (!sameNoteIdentity(afterIdentity, currentIdentity)
@@ -1015,7 +1081,12 @@ export default class VaultFlowPlugin extends Plugin {
           }
         }
 
-        this.writeSafety.consume(this.settings.maxWritesPerMinute);
+        const timestamp = Date.now();
+        const transactionId = createTransactionId(timestamp, currentPath);
+        this.startJournal({ transactionId, timestamp, beforePath: currentPath, afterPath: originalPath, operation: "undo",
+          beforeFrontmatter: resolvedDecision.afterFrontmatter, afterFrontmatter: resolvedDecision.beforeFrontmatter,
+          mutationKinds: resolvedDecision.mutationKinds, ruleIds: [], iterations: 0,
+          ...(resolvedDecision.transactionId === undefined ? {} : { revertsTransactionId: resolvedDecision.transactionId }) });
         let renamed = false;
         if (currentPath !== originalPath) {
           await this.app.fileManager.renameFile(file, originalPath);
@@ -1042,7 +1113,12 @@ export default class VaultFlowPlugin extends Plugin {
           throw error;
         }
 
-        return { renamed, restoredFrontmatter: hasFrontmatterTransaction };
+        let restoredIdentity;
+        try { restoredIdentity = await captureNoteIdentity(this.app, file); } catch { restoredIdentity = undefined; }
+        this.finishJournal({ transactionId, beforePath: currentPath, afterPath: originalPath,
+          ...(hasFrontmatterTransaction ? { beforeFrontmatter: resolvedDecision.afterFrontmatter, afterFrontmatter: resolvedDecision.beforeFrontmatter } : {}),
+          ...(restoredIdentity === undefined ? {} : { afterIdentity: restoredIdentity }) });
+        return { renamed, restoredFrontmatter: hasFrontmatterTransaction, transactionId };
       });
 
       this.queue?.cancel(currentPath);
@@ -1052,6 +1128,7 @@ export default class VaultFlowPlugin extends Plugin {
         timestamp,
         path: currentPath,
         outcome: "undone",
+        transactionId: undone.transactionId,
         appliedRuleIds: [],
         involvedRuleIds: [],
         mutationKinds: resolvedDecision.mutationKinds,
