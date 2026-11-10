@@ -274,6 +274,7 @@ Planning first evaluates metadata and earlier rule actions in memory, loading a 
 - A multi-file batch is not one atomic transaction; each note is validated and written independently.
 - Undo history is bounded and device-local. Keep backups or version history.
 - Bases does not expose a supported headless query API, so live and sweep automation use Vault Flow's own planner.
+- Rules are limited to 1,000 per settings snapshot, 64 levels of input nesting, 8,192 input values/containers per rule, and 65,536 across the ruleset (including fixtures and unknown fields). Oversized imports are rejected; oversized saved settings disable automation without overwriting the file.
 - Globs use the `*`, `**`, and `?` dialect and are limited to 1,024 characters.
 - Regexes use RE2-compatible syntax rather than the full JavaScript RegExp syntax.
 - Automated checks are source/headless verification, not runtime confirmation. Minimum/current desktop, physical mobile devices, Sync, external-file views, pop-out windows, accessibility, crash/storage recovery, and very large vaults require the [application validation matrix](docs/validation.md).

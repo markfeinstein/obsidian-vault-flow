@@ -1,4 +1,5 @@
 import type { Rule } from "../engine";
+import { ruleInputLimitError } from "../engine/rule-limits";
 import { sanitizeRules } from "./settings";
 import { ruleConvergenceWarnings } from "./rule-warnings";
 
@@ -96,6 +97,8 @@ export function parseRuleImport(text: string): RuleImportResult {
     return { status: "error", error: "Rule import must be a JSON array or an object with a rules array." };
   }
 
+  const limitError = ruleInputLimitError(rulesValue);
+  if (limitError !== null) return { status: "error", error: limitError };
   const result = sanitizeRules(rulesValue, []);
   const droppedRuleCount = rulesValue.length - result.rules.length;
   const issues = buildImportIssues(rulesValue);

@@ -1,4 +1,5 @@
 import { compilePathGlob } from "./path-glob";
+import { ruleInputLimitError } from "./rule-limits";
 import { canonicalValue, sortValue } from "./value-utils";
 import { lazyBodyRegexMatcher } from "./body-regex-set";
 import { compileRuleRegex, regexCompilerForRules, type RuleRegex } from "./rule-regex";
@@ -53,7 +54,15 @@ interface TemplateContext {
 // Public API
 // ---------------------------------------------------------------------------
 
+const validatedRuleInputs = new WeakSet<readonly Rule[]>();
+
 export function reconcileFileState(input: ReconciliationInput): ReconciliationResult {
+  // Rulesets are immutable snapshots. Validate once per snapshot, not per note.
+  if (!validatedRuleInputs.has(input.rules)) {
+    const limitError = ruleInputLimitError(input.rules);
+    if (limitError !== null) throw new Error(limitError);
+    validatedRuleInputs.add(input.rules);
+  }
   const now = input.options.now ?? Date.now();
   const dateFormatter = input.options.formatDate ?? formatDate;
   const baseline = normalizeComparableInput(input.file);
