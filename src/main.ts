@@ -6,6 +6,8 @@ import { RecoveryModal } from "./obsidian/recovery-modal";
 import { WorkInboxModal } from "./obsidian/work-inbox-modal";
 import { buildWorkInbox, type WorkInboxItem } from "./obsidian/work-inbox";
 import type { RuleRunOn } from "./engine";
+import { SettingsRevisionHistory, type SettingsRevisionSource } from "./obsidian/settings-history";
+import { SettingsHistoryModal, type SettingsRestoreRequest } from "./obsidian/settings-history-modal";
 import { mapWithConcurrency } from "./obsidian/concurrency";
 import { compactPreviewPlan } from "./obsidian/preview-snapshot";
 import { unknownValuesEqual } from "./engine/value-utils";
@@ -36,7 +38,7 @@ import { SourceDuplicatesModal } from "./obsidian/source-duplicates-modal";
 import { VaultFlowSettingTab } from "./obsidian/settings-tab";
 import {
   DEFAULT_SETTINGS,
-  SETTINGS_SCHEMA_VERSION,
+  settingsDataForSave,
   sanitizeVaultFlowRuntimeState,
   sanitizeVaultFlowSettings,
   type VaultFlowRuntimeState,
@@ -81,6 +83,8 @@ export default class VaultFlowPlugin extends Plugin {
   private diagnosticsRefreshTimer: number | null = null;
   private runtimeSaveFailed = false;
   private journal: TransactionJournal | null = null;
+  private settingsHistory: SettingsRevisionHistory | null = null;
+  private settingsHistorySaveFailed = false;
 
   override async onload(): Promise<void> {
     this.loaded = true;
@@ -104,6 +108,8 @@ export default class VaultFlowPlugin extends Plugin {
       recentDecisions: pruneDecisions(runtimeResult.runtimeState.recentDecisions.map(diagnosticSummary)),
     };
     this.settingsRevision = 1;
+    this.settingsHistory = new SettingsRevisionHistory(this.app);
+    if (!this.settingsReadOnly) this.captureSettingsRevision(this.settings, "startup");
     this.journal = new TransactionJournal(this.app);
     if (!this.settingsReadOnly) {
       const recorded = new Set([...this.transactions, ...this.settings.recentDecisions.filter((decision) => decision.outcome === "undone")].map((decision) => decision.transactionId));
@@ -321,6 +327,13 @@ export default class VaultFlowPlugin extends Plugin {
       id: "inspect-write-recovery",
       name: "Inspect pending-write recovery",
       callback: () => this.openWriteRecovery(),
+    });
+
+    this.addCommand({
+      id: "show-settings-history",
+      name: "Show settings revision history",
+      callback: () => new SettingsHistoryModal(this.app, () => this.settingsHistory?.entries() ?? [],
+        (id) => this.prepareSettingsRestore(id), this.settingsHistory?.blockedReason ?? null).open(),
     });
 
     this.addCommand({
@@ -607,8 +620,10 @@ export default class VaultFlowPlugin extends Plugin {
       recentDecisions: this.settings.recentDecisions,
       ruleStats: this.settings.ruleStats,
     };
+    if (!this.settingsReadOnly) this.captureSettingsRevision(this.settings, "before-change");
     this.settingsReadOnly = sanitized.incompatibleVersion !== undefined || sanitized.regexErrors !== undefined || sanitized.scopeErrors !== undefined || sanitized.ruleErrors !== undefined;
     this.settings = { ...sanitized.settings, ...runtimeState };
+    if (!this.settingsReadOnly) this.captureSettingsRevision(this.settings, "external");
     this.settingsRevision += 1;
     this.configurePeriodicSweep();
     this.updateStatusBar();
@@ -652,7 +667,7 @@ export default class VaultFlowPlugin extends Plugin {
     void this.enqueueAllWithConfirmation();
   }
 
-  public async updateSettings(settings: Partial<VaultFlowSettings>): Promise<void> {
+  public async updateSettings(settings: Partial<VaultFlowSettings>, revisionSource: "edit" | "restore" = "edit"): Promise<void> {
     if (this.settingsReadOnly) {
       new Notice("Vault Flow settings are read-only because they contain an unsupported schema or pattern. Fix the settings file and reload the plugin.");
       return;
@@ -671,12 +686,28 @@ export default class VaultFlowPlugin extends Plugin {
       new Notice(`Vault Flow did not save settings: unsupported regex or glob in ${sanitizedSettings.regexErrors.join(", ")}.`);
       return;
     }
-    this.settings = sanitizedSettings.settings;
-    this.settingsRevision += 1;
+    const nextSettings = sanitizedSettings.settings;
+    this.captureSettingsRevision(previousSettings, "before-change");
+    this.settings = nextSettings;
+    const editRevision = ++this.settingsRevision;
     if (sanitizedSettings.sanitized) {
       new Notice("Vault Flow ignored one or more invalid setting values.");
     }
-    await this.saveSettings();
+    try { await this.saveSettings(nextSettings); }
+    catch (error) {
+      if (this.settingsRevision === editRevision) {
+        // Runtime decisions/mtimes can arrive during save without changing the
+        // configuration revision. Roll back config, not those newer events.
+        this.settings = { ...previousSettings, trackedMtimes: this.settings.trackedMtimes,
+          recentDecisions: this.settings.recentDecisions, ruleStats: this.settings.ruleStats };
+        this.settingsRevision += 1;
+      }
+      this.writeSafety.pause("Settings could not be saved; verify configuration before resuming");
+      this.configurePeriodicSweep();
+      this.updateStatusBar();
+      throw error;
+    }
+    this.captureSettingsRevision(nextSettings, revisionSource);
     this.updateStatusBar();
     this.configurePeriodicSweep();
     if (previousSettings.sweepOnStartup && !this.settings.sweepOnStartup) {
@@ -1291,9 +1322,49 @@ export default class VaultFlowPlugin extends Plugin {
     }
   }
 
-  private async saveSettings(): Promise<void> {
+  private captureSettingsRevision(settings: VaultFlowSettings, source: SettingsRevisionSource): void {
+    if (this.settingsHistory === null) return;
+    try { this.settingsHistory.capture(settings, source); this.settingsHistorySaveFailed = false; }
+    catch (error) {
+      if (!this.settingsHistorySaveFailed) new Notice(`Vault Flow could not retain settings revisions: ${error instanceof Error ? error.message : String(error)}`);
+      this.settingsHistorySaveFailed = true;
+    }
+  }
+
+  private prepareSettingsRestore(id: string): SettingsRestoreRequest {
+    const history = this.settingsHistory;
+    if (!this.loaded || this.settingsReadOnly || history === null) throw new Error("Restore requires loaded, compatible settings. Copy revision JSON for manual recovery of incompatible settings.");
+    const candidate = history.candidate(id);
+    const revision = this.settingsRevision;
+    const expected = JSON.stringify(settingsDataForSave(this.settings));
+    return {
+      summary: `Replace the current ${this.settings.rules.length} rules and configuration with ${candidate.rules.length} rules from this revision? Target dry-run: ${candidate.dryRun}. Note changes, runtime history, and pending-write recovery are unaffected. Current configuration must be backed up locally first. Writes will remain paused until you inspect the restored settings and explicitly resume.`,
+      apply: async () => this.mutationCoordinator.runExclusive(async () => {
+        await this.settingsSaveChain;
+        const assertCurrent = (): void => {
+          if (!this.loaded || this.settingsReadOnly || this.settingsRevision !== revision) throw new Error("Settings changed while restore was being reviewed; refresh history and review again.");
+        };
+        assertCurrent();
+        const raw: unknown = await this.loadData();
+        assertCurrent();
+        const disk = sanitizeVaultFlowSettings(raw);
+        if (disk.sanitized || disk.incompatibleVersion !== undefined || disk.ruleErrors !== undefined || disk.regexErrors !== undefined || disk.scopeErrors !== undefined
+          || JSON.stringify(settingsDataForSave(disk.settings)) !== expected) throw new Error("Settings changed on disk or need manual inspection; reload and review them before restoring.");
+        // Unlike best-effort automatic history, restore fails closed if it cannot
+        // retain the configuration it is about to replace.
+        history.capture(this.settings, "before-change");
+        this.writeSafety.pause("Settings restored; inspect rules and explicitly resume writes");
+        const { settingsVersion: _version, ...config } = settingsDataForSave(candidate);
+        await this.updateSettings(config, "restore");
+        new Notice("Vault Flow settings restored. Writes remain paused; inspect rules before resuming.");
+      }),
+    };
+  }
+
+  private async saveSettings(settings: VaultFlowSettings = this.settings): Promise<void> {
+    const data = settingsDataForSave(settings);
     const save = this.settingsSaveChain.then(async () => {
-      await this.saveData(settingsDataForSave(this.settings));
+      await this.saveData(data);
     });
     this.settingsSaveChain = save.catch(() => {});
     await save;
@@ -1418,28 +1489,6 @@ class VaultPlanningProgressModal extends Modal {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-type PersistedVaultFlowSettings = Omit<VaultFlowSettings, "recentDecisions" | "trackedMtimes" | "ruleStats"> & { readonly settingsVersion: number };
-
-function settingsDataForSave(settings: VaultFlowSettings): PersistedVaultFlowSettings {
-  return {
-    settingsVersion: SETTINGS_SCHEMA_VERSION,
-    rules: settings.rules,
-    debounceMs: settings.debounceMs,
-    maxIterations: settings.maxIterations,
-    useRegexSet: settings.useRegexSet,
-    maxWritesPerMinute: settings.maxWritesPerMinute,
-    maxBatchWrites: settings.maxBatchWrites,
-    dryRun: settings.dryRun,
-    collisionPolicy: settings.collisionPolicy,
-    sweepOnStartup: settings.sweepOnStartup,
-    periodicSweepEnabled: settings.periodicSweepEnabled,
-    sweepIntervalMs: settings.sweepIntervalMs,
-    monitoredFolders: settings.monitoredFolders,
-    exclusionPatterns: settings.exclusionPatterns,
-    disableFrontmatterKey: settings.disableFrontmatterKey,
-  };
 }
 
 function formatDiagnosticTimestamp(timestamp: number): string {

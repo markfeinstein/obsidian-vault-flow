@@ -43,6 +43,29 @@ export interface VaultFlowSettings {
   readonly ruleStats: RuleStatsMap;
 }
 
+export type PersistedVaultFlowSettings = Omit<VaultFlowSettings, "recentDecisions" | "trackedMtimes" | "ruleStats"> & { readonly settingsVersion: number };
+
+/** The single synced/backup shape: never include device-local runtime history. */
+export function settingsDataForSave(settings: VaultFlowSettings): PersistedVaultFlowSettings {
+  return {
+    settingsVersion: SETTINGS_SCHEMA_VERSION,
+    rules: settings.rules,
+    debounceMs: settings.debounceMs,
+    maxIterations: settings.maxIterations,
+    useRegexSet: settings.useRegexSet,
+    maxWritesPerMinute: settings.maxWritesPerMinute,
+    maxBatchWrites: settings.maxBatchWrites,
+    dryRun: settings.dryRun,
+    collisionPolicy: settings.collisionPolicy,
+    sweepOnStartup: settings.sweepOnStartup,
+    periodicSweepEnabled: settings.periodicSweepEnabled,
+    sweepIntervalMs: settings.sweepIntervalMs,
+    monitoredFolders: settings.monitoredFolders,
+    exclusionPatterns: settings.exclusionPatterns,
+    disableFrontmatterKey: settings.disableFrontmatterKey,
+  };
+}
+
 export interface SanitizedVaultFlowSettings {
   readonly settings: VaultFlowSettings;
   readonly sanitized: boolean;

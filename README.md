@@ -160,6 +160,14 @@ Undo records are kept separately from diagnostics. Vault Flow retains up to 100 
 
 Runtime history, batch receipts, sweep state, and rule statistics are stored in Obsidian's device-local plugin storage rather than synced settings.
 
+## Settings revision history
+
+**Show settings revision history** retains device-local snapshots of accepted rules and configuration across edits, external settings reloads, and restarts. It keeps at most 20 revisions, with a 512 KiB UTF-8 limit per revision and a 2 MiB limit for the complete stored history; consecutive identical configurations are deduplicated. Runtime diagnostics, undo history, tracked mtimes, and note bodies are excluded.
+
+**Review restore** requires explicit confirmation, lossless validation, a backup of the configuration being replaced, and checks for observed in-memory or on-disk changes since review. It preserves runtime state and pending-write recovery and **leaves writes paused** until you inspect the rules and explicitly resume. Restoring settings does not undo note changes. Obsidian does not provide cross-process compare-and-swap for settings, so keep Sync/external editors quiescent during restore.
+
+Automatic history capture is best effort: storage failures or oversized configurations produce a notice without blocking normal editing. Restore fails closed if the pre-restore backup cannot be retained. Invalid or unknown history formats are preserved rather than overwritten. Incompatible settings cannot be replaced automatically; **Copy revision JSON** is available for manual recovery. Copies include rule values and fixtures—store them securely. Device-local history is not a synced or independent backup.
+
 ## Failed-work inbox
 
 **Show failed-work inbox** groups unresolved recent work by metadata/read failures, planning problems, collisions, stale previews, active-note deferrals, and pending-write recovery. It shows at most 500 items with 50 rows per page, using recent device-local diagnostics and the recovery journal—not a second durable job queue.
@@ -198,6 +206,7 @@ Select the rows you want, open the apply preview, and confirm the batch. Vault F
 - **Inspect pending-write recovery**
 - **Show apply batch receipts**
 - **Show failed-work inbox**
+- **Show settings revision history**
 - **Export diagnostics to Markdown**
 - **Export settings to clipboard**
 
