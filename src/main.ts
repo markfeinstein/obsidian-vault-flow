@@ -69,6 +69,7 @@ export default class VaultFlowPlugin extends Plugin {
   });
   private lastSweepRevision = -1;
   private lastSweepAt: number | null = null;
+  private readonly sweepEvaluationTimes = new Map<string, number>();
   private pendingSweepPaths = new Set<string>();
   private transactions: readonly ReconciliationDecision[] = [];
   private batches: readonly BatchReceipt[] = [];
@@ -157,8 +158,13 @@ export default class VaultFlowPlugin extends Plugin {
         onReconciled: async (file, context) => {
           // A live/manual pass says nothing about sweep-only rules.
           if (context.triggerContexts.includes("sweep") && context.revision === this.settingsRevision) {
+            this.sweepEvaluationTimes.delete(context.path);
+            this.sweepEvaluationTimes.set(normalizePath(file.path), context.evaluatedAt);
             this.trackSweepMtime(file);
           }
+        },
+        onFailed: (_file, context) => {
+          if (context.mutationStarted) this.writeSafety.pause("A note mutation failed; inspect pending-write recovery before resuming");
         },
         runExclusive: async (operation) => this.mutationCoordinator.runExclusive(operation),
         onMutationStarted: (pending) => this.startJournal(pending),
@@ -941,20 +947,25 @@ export default class VaultFlowPlugin extends Plugin {
       this.app.metadataCache.getFileCache(file) === null
       && evaluateFileEligibility(file, {}, this.settings).eligible).map((file) => normalizePath(file.path)));
     const markdownFiles = allFiles.filter((file) => this.isProcessableFile(file));
+    const currentPaths = new Set(markdownFiles.map((file) => normalizePath(file.path)));
+    for (const path of this.sweepEvaluationTimes.keys()) if (!currentPaths.has(path)) this.sweepEvaluationTimes.delete(path);
     const plan = planMtimeSweep(markdownFiles, this.settings.trackedMtimes, {
       force,
       ...(force ? {} : {
-        shouldReevaluate: (file: TFile) => timeDependentSweepDue(
-          file,
-          this.app.metadataCache.getFileCache(file),
-          this.settings.rules,
-          previousSweepAt,
-          now,
-        ),
+        shouldReevaluate: (file: TFile) => {
+          const evaluatedAt = this.sweepEvaluationTimes.get(normalizePath(file.path));
+          return evaluatedAt === undefined || timeDependentSweepDue(
+            file,
+            this.app.metadataCache.getFileCache(file),
+            this.settings.rules,
+            evaluatedAt,
+            now,
+          );
+        },
       }),
     });
-    // Advance the observation window before yielding to bulk queue population so
-    // overlapping timer callbacks cannot enqueue the same threshold twice.
+    // Global time only identifies first/forced sweeps. Each note retains its last
+    // successful evaluation window, so enqueueing a failed age rule cannot lose it.
     this.lastSweepRevision = this.settingsRevision;
     this.lastSweepAt = now;
 

@@ -148,7 +148,7 @@ Strict RE2 syntax remains the default: lookarounds and backreferences are reject
 - Monitored folders, exclusion globs, and a per-note disable property control the processing scope.
 - Invalid scope settings disable automation instead of falling back to whole-vault access.
 - Live writes wait while the target note is active.
-- Startup sweeps retain their trigger for notes indexed after the workspace appears.
+- Startup sweeps retain their trigger for notes indexed after the workspace appears. Time-dependent sweeps retain each note's last successful evaluation window, so a safe failure does not lose an age threshold. A failed operation that reached the mutation boundary pauses writes for recovery instead of being retried automatically.
 - Metadata and body-read failures stop after three attempts, with exponential retry backoff capped at 30 seconds.
 - Planning and writing recheck the file path, metadata, body content when needed, settings revision, and destination collision state.
 - Mutations are serialized. If a property write fails after a rename, Vault Flow attempts to move the note back.

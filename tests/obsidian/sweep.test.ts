@@ -99,7 +99,12 @@ describe("sweep invalidation", () => {
     };
     plugin.settings = { ...DEFAULT_SETTINGS, trackedMtimes: { "note.md": 1 } };
     plugin.settingsRevision = 1;
-    plugin.queue = { enqueueMany: async (files, context) => { for (const item of files) enqueue(item, context); } };
+    plugin.queue = { enqueueMany: async (files, context) => {
+      for (const item of files) enqueue(item, context);
+      // This queue stub models successful completion, not merely population.
+      const windows = (plugin as unknown as { sweepEvaluationTimes: Map<string, number> }).sweepEvaluationTimes;
+      for (const item of files) windows.set(item.path, Date.now());
+    } };
     await plugin.runMtimeSweep();
     expect(enqueue).toHaveBeenCalledTimes(1);
     await plugin.runMtimeSweep();
@@ -124,7 +129,11 @@ describe("sweep invalidation", () => {
     };
     plugin.settings = { ...DEFAULT_SETTINGS, rules: [{ ...rule, when: { type: "fileAge", field: "mtime", olderThanDays: 30 } }], trackedMtimes: { "aged.md": timestamp } };
     plugin.settingsRevision = 1;
-    plugin.queue = { enqueueMany: async (files, context) => { for (const item of files) enqueue(item, context); } };
+    plugin.queue = { enqueueMany: async (files, context) => {
+      for (const item of files) enqueue(item, context);
+      const windows = (plugin as unknown as { sweepEvaluationTimes: Map<string, number> }).sweepEvaluationTimes;
+      for (const item of files) windows.set(item.path, Date.now());
+    } };
 
     vi.setSystemTime(timestamp + 10 * DAY);
     await plugin.runMtimeSweep();

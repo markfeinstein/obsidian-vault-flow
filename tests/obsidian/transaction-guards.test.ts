@@ -35,7 +35,7 @@ describe("transaction mutation boundaries", () => {
     const queue = new ReconciliationQueue(h.app, () => ({ revision: 3, debounceMs: 1, maxIterations: 3, dryRun: true, collisionPolicy: "skip", rules: [] }), { onReconciled });
     queue.enqueue(h.file, trigger);
     await vi.advanceTimersByTimeAsync(1);
-    expect(onReconciled).toHaveBeenCalledWith(h.file, { triggerContexts: [trigger], revision: 3 });
+    expect(onReconciled).toHaveBeenCalledWith(h.file, expect.objectContaining({ path: h.file.path, triggerContexts: [trigger], revision: 3, evaluatedAt: Date.now() }));
     queue.clear();
   });
 
